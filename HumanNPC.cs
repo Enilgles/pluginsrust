@@ -5,13 +5,11 @@ using Newtonsoft.Json.Linq;
 using Oxide.Core;
 using Oxide.Core.Configuration;
 using Oxide.Core.Plugins;
+using Oxide.Game.Rust;
 using Rust;
-using Network;
 using Facepunch;
-using Facepunch.Utility;
 using System;
 using System.Collections.Generic;
-using System.Collections;
 using System.Globalization;
 using System.Linq;
 using UnityEngine;
@@ -19,8 +17,8 @@ using Convert = System.Convert;
 
 namespace Oxide.Plugins
 {
-    [Info("Human NPC", "Razor", "0.5.4")]
-    [Description("Adds interactive human NPCs which can be modded by other plugins")]
+    [Info("HumanNPC", "Reneb/Nogrod/Calytic FIX BY HUZAKI", "0.3.48", ResourceId = 856)]
+    [Description("Adds interactive Human NPCs which can be modded by other plugins")]
     public class HumanNPC : RustPlugin
     {
         //////////////////////////////////////////////////////
@@ -31,34 +29,18 @@ namespace Oxide.Plugins
         private static int targetLayer;
         private static Vector3 Vector3Down;
         private static int groundLayer;
-		private static HumanNPC ins;
-        private Coroutine QueuedSpawn { get; set; }
 
-        private bool NewTeam;
-		private int TeamCount = 0;
-		private BasePlayer TeamPlayer;
-		private Hash<ulong, RelationshipManager.PlayerTeam> PlayersTeams = new Hash<ulong, RelationshipManager.PlayerTeam>();
- 
         private Hash<ulong, HumanNPCInfo> humannpcs = new Hash<ulong, HumanNPCInfo>();
 
         static int playerMask = LayerMask.GetMask("Player (Server)");
         static int obstructionMask = LayerMask.GetMask(new[] { "Player (Server)", "Construction", "Deployed", "Clutter" });
-        static int constructionMask = LayerMask.GetMask(new[] { "Construction", "Deployed", "Clutter" });
-        static int terrainMask = LayerMask.GetMask(new[] { "Terrain", "Tree" });
 
-        private readonly Hash<ulong, RecordingData> Recording = new Hash<ulong, RecordingData>();
-        private readonly Hash<string, NpcSound> Sounds = new Hash<string, NpcSound>();
-		private readonly Hash<string, NpcSound> cached = new Hash<string, NpcSound>();
-		public List<ulong> NpcTalking = new List<ulong>();
-		
         private bool save;
         private StoredData storedData;
         private DynamicConfigFile data;
         private Vector3 eyesPosition;
         private string chat = "<color=#FA58AC>{0}:</color> ";
-		private bool TeamsNPC = true;
-		private float RadiusNPC = 5.0f;
-		
+
         [PluginReference]
         private Plugin Kits, Waypoints, Vanish;
 
@@ -93,228 +75,6 @@ namespace Oxide.Plugins
             return blocked;
         }
 
-        [ChatCommand("npc_sound")]
-        private void ChatCommandNpctalk(BasePlayer player, string cmd, string[] args)
-        {
-			string colorCode = "#FFFF00";
-			if (player.net.connection.authLevel < 1)
-			{
-				SendReply(player, "You do not have access to this command.");
-				return;
-			}
-            if (args.Length == 0)
-            {
-				SendReply(player, "Record sound that can be played back with Npc\n\n" + $"<color={colorCode}>/npc_sound add soundname</color> - Start recording a new sound.\n" + $"<color={colorCode}>/npc_sound save</color> - Save your recorded sound.\n" + $"<color={colorCode}>/npc_sound cancel</color> - Cancel your recording and not save.\n" + $"<color={colorCode}>/npc_sound</color> - View help text.");
-                return;
-            }
-
-            switch (args[0].ToLower())
-            {
-                case "add":
-                    Add(player, args);
-                    break;
-
-                case "cancel":
-                    Reset(player);
-                    break;
-
-                case "save":
-                    Save(player);
-                    break;
-
-                default:
-                 	SendReply(player, "Record sound that can be played back with Npc\n\n" + $"<color={colorCode}>/npc_sound add soundname</color> - Start recording a new sound.\n" + $"<color={colorCode}>/npc_sound save</color> - Save your recorded sound.\n" + $"<color={colorCode}>/npc_sound cancel</color> - Cancel your recording and not save.\n" + $"<color={colorCode}>/npc_sound</color> - View help text.");
-                    break;
-            }
-        }
-
-        private void Add(BasePlayer player, string[] args)
-        {
-            if (Recording.ContainsKey(player.userID))
-            {
-				SendReply(player, "You already started a recording.");
-                return;
-            }
-
-            if (args.Length < 2)
-            {
-				SendReply(player, "Incorrect usage");
-                return;
-            }
-
-            bool overwrite = args.Any(a => a.ToLower() == "overwrite");
-            string name = string.Join(" ", args.Skip(1).Where(a => a.ToLower() != "overwrite").ToArray());
-            if (!overwrite && FileExists(name))
-            {
-				SendReply(player, "There is a sound file with that name already");
-                return;
-            }
-
-            Recording[player.userID] = new RecordingData
-            {
-                Name = name
-            };
-
-			SendReply(player, "Start talking ingame to record your voice and /npc_sound save when done.");
-        }
-
-        private void Save(BasePlayer player)
-        {
-            RecordingData recording = Recording[player.userID];
-            if (recording == null)
-            {
-                SendReply(player, "You are not recording so nothing to save");
-                return;
-            }
-
-            NpcSound data = new NpcSound
-            {
-                Data = recording.Data,
-            };
-
-            SaveSoundData(recording.Name, data);
-            Recording.Remove(player.userID);
-			
-			SendReply(player, "Saved your recording as " + recording.Name);
-        }
-
-        private void Reset(BasePlayer player)
-        {
-            RecordingData recording = Recording[player.userID];
-            if (recording == null)
-            {
-				SendReply(player, "You are not recording so nothing to cancel");
-                return;
-            }
-
-            recording.Data.Clear();
-			Recording.Remove(player.userID);
-
-           SendReply(player, "Recording canceled!");
-        }
-		
-        public class NpcSound
-        {
-            [JsonConverter(typeof(SoundFileConverter))]
-            public List<byte[]> Data = new List<byte[]>();
-        }
-
-        private class SoundFileConverter : JsonConverter
-        {
-            public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
-            {
-                List<byte[]> data = (List<byte[]>) value;
-
-                writer.WriteValue(Convert.ToBase64String(Compression.Compress(ins.ToSaveData(data))));
-            }
-
-            public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
-            {
-                JToken value = JToken.Load(reader);
-
-                return ins.FromSaveData(Compression.Uncompress(Convert.FromBase64String(value.ToString())));
-            }
-
-            public override bool CanConvert(Type objectType)
-            {
-                return typeof(List<byte>) == objectType;
-            }
-        }
-
-        private byte[] ToSaveData(List<byte[]> data)
-        {
-            return data.Select(cd => BitConverter.GetBytes(cd.Length))
-                .SelectMany(cd => cd)
-                .Concat(data.SelectMany(cd => cd))
-                .ToArray();
-        }
-
-        private NpcSound LoadDataSound(string name)
-        {
-            NpcSound cache = cached[name];
-            if (cache != null)
-            {
-                return cache;
-            }
-
-            NpcSound data = Interface.Oxide.DataFileSystem.ReadObject<NpcSound>(Name + "/Sounds/" + name);
-			if (data == null) return null;
-            cached[name] = data;
-            return data;
-        }
-		
-        private List<byte[]> FromSaveData(byte[] bytes)
-        {
-            List<int> dataSize = new List<int>();
-            List<byte[]> dataBytes = new List<byte[]>();
-
-            int offset = 0;
-            while (true)
-            {
-                dataSize.Add(BitConverter.ToInt32(bytes, offset));
-                offset += 4;
-
-                int sum = dataSize.Sum();
-                if (sum == bytes.Length - offset)
-                {
-                    break;
-                }
-
-                if (sum > bytes.Length - offset)
-                {
-                    throw new ArgumentOutOfRangeException(nameof(dataSize),
-                        $"Voice Data is outside the saved range {dataSize.Sum()} > {bytes.Length - offset}");
-                }
-            }
-
-            foreach (int size in dataSize)
-            {
-                dataBytes.Add(bytes.Skip(offset).Take(size).ToArray());
-                offset += size;
-            }
-
-            return dataBytes;
-        }
-		
-        private NpcSound LoadData(string name)
-        {
-            NpcSound cache = Sounds[name];
-            if (cache != null)
-            {
-                return cache;
-            }
-
-            if (!FileExists(name))
-            {
-                return null;
-            }
-
-            NpcSound data = Interface.Oxide.DataFileSystem.ReadObject<NpcSound>($"{Name}/Sounds/{name}");
-            Sounds[name] = data;
-            return data;
-        }   
-        private class RecordingData : NpcSound
-        {
-            public string Name { get; set; }
-        }
-		
-		private bool FileExists(string name)
-        {
-            return Interface.Oxide.DataFileSystem.ExistsDatafile($"{Name}/Sounds/{name}");
-        }
-		
-		private void SaveSoundData(string name, NpcSound data)
-        {
-            Interface.Oxide.DataFileSystem.WriteObject($"{Name}/Sounds/{name}", data);
-            Sounds[name] = data;
-        }
-
-        private void OnPlayerVoice(BasePlayer player, byte[] data)
-        {
-            RecordingData recording = Recording[player.userID];
-            recording?.Data.Add(data);
-        }
-	
         //////////////////////////////////////////////////////
         ///  class SpawnInfo
         ///  Spawn information, position & rotation
@@ -413,8 +173,6 @@ namespace Oxide.Plugins
             }
         }
 
-
-        //assets/bundled/prefabs/static/chair_c.static.prefab
         //////////////////////////////////////////////////////
         ///  class HumanLocomotion
         /// MonoBehaviour: managed by UnityEngine
@@ -426,7 +184,6 @@ namespace Oxide.Plugins
             public Vector3 StartPos = new Vector3(0f, 0f, 0f);
             public Vector3 EndPos = new Vector3(0f, 0f, 0f);
             public Vector3 LastPos = new Vector3(0f, 0f, 0f);
-			public Dictionary<Vector3, float> NoMoveInfo = new Dictionary<Vector3, float>();
             private Vector3 nextPos = new Vector3(0f, 0f, 0f);
             private float waypointDone = 0f;
             public float secondsTaken = 0f;
@@ -445,8 +202,6 @@ namespace Oxide.Plugins
             private bool reloading = false;
             public bool returning = false;
             public bool sitting = false;
-            public static List<BaseEntity> allChairs = new List<BaseEntity>();
-            public static List<Vector3> chairPosition = new List<Vector3>();
 
             public BaseCombatEntity attackEntity = null;
             public BaseEntity followEntity = null;
@@ -463,7 +218,6 @@ namespace Oxide.Plugins
 
                 npc.player.modelState.onground = true;
             }
-
             public void UpdateWaypoints()
             {
                 if (string.IsNullOrEmpty(npc.info.waypoint)) return;
@@ -475,22 +229,13 @@ namespace Oxide.Plugins
                     cachedWaypoints = new List<WaypointInfo>();
                     var lastPos = npc.info.spawnInfo.position;
                     var speed = GetSpeed();
-					NoMoveInfo.Clear();
                     foreach (var cwaypoint in (List<object>)cwaypoints)
                     {
                         foreach (var pair in (Dictionary<Vector3, float>)cwaypoint)
                         {
-							foreach (var find in cachedWaypoints)
-							{
-								if (find.Position == pair.Key)
-								{
-									if (!NoMoveInfo.ContainsKey(pair.Key))
-									NoMoveInfo.Add(pair.Key, pair.Value);
-								}
-							}
                             if (HumanNPC.PathFinding == null)
                             {
-                                cachedWaypoints.Add(new WaypointInfo(pair.Key, pair.Value));								
+                                cachedWaypoints.Add(new WaypointInfo(pair.Key, pair.Value));
                                 continue;
                             }
                             var temppathFinding = HumanNPC.PathFinding.Go(lastPos, pair.Key);
@@ -499,9 +244,7 @@ namespace Oxide.Plugins
                             {
                                 lastPos = pair.Key;
                                 foreach (var vector3 in temppathFinding)
-								{
                                     cachedWaypoints.Add(new WaypointInfo(vector3, speed));
-								}
                             }
                             else
                             {
@@ -540,28 +283,9 @@ namespace Oxide.Plugins
             public void TryToMove()
             {
                 if (npc.player.IsDead() || npc.player.IsWounded()) return;
-
-                if (targetPosition != Vector3.zero)
-                {
-#if DEBUG
-                    Interface.Oxide.LogInfo("TryToMove: ProcessFollow(target)");
-#endif
-                    ProcessFollow(targetPosition);
-                }
-                if (attackEntity is BaseCombatEntity)
-                {
-#if DEBUG
-                    Interface.Oxide.LogInfo("TryToMove: ProcessAttack(attackEntity)");
-#endif
-                    ProcessAttack(attackEntity);
-                }
-                else if (followEntity is BaseEntity)
-                {
-#if DEBUG
-                    Interface.Oxide.LogInfo("TryToMove: ProcessFollow(followEntity)");
-#endif
-                    ProcessFollow(followEntity.transform.position);
-                }
+                if (targetPosition != Vector3.zero) ProcessFollow(targetPosition);
+                else if (attackEntity is BaseCombatEntity) ProcessAttack(attackEntity);
+                else if (followEntity is BaseEntity) ProcessFollow(followEntity.transform.position);
                 else if (secondsTaken == 0f) GetNextPath();
 
                 if (StartPos != EndPos) Execute_Move();
@@ -578,8 +302,8 @@ namespace Oxide.Plugins
                 //npc.player.eyes.position = nextPos + new Vector3(0, 1.6f, 0);
                 var newEyesPos = nextPos + new Vector3(0, 1.6f, 0);
                 npc.player.eyes.position.Set(newEyesPos.x, newEyesPos.y, newEyesPos.z);
-                npc.player.EnablePlayerCollider();
-				//npc.player.UpdatePlayerCollider(true);
+                npc.player.UpdatePlayerCollider(true);
+
                 npc.player.modelState.onground = !IsSwimming();
             }
 
@@ -590,64 +314,13 @@ namespace Oxide.Plugins
 #if DEBUG
                 Interface.Oxide.LogInfo("Evading...");
 #endif
-//                var ra = UnityEngine.Random.Range(0f, 100f);
-//                if(ra > 40f)
-//                {
-//                    npc.player.modelState.ducked = true;
-//                }
-//                else
-//                {
-//                    npc.player.modelState.ducked = false;
-//                }
-                   Vector3 ev = new Vector3(UnityEngine.Random.Range(-npc.info.evdist, npc.info.evdist), UnityEngine.Random.Range(-1.5f, 1.5f));
-                Vector3 newpos = npc.player.transform.position + ev;
-#if DEBUG
-                Interface.Oxide.LogInfo($"  first trying new position {newpos.ToString()}");
-#endif
-                RaycastHit hitinfo;
-                int i = 0;
-                while(Physics.OverlapSphere(newpos, npc.info.evdist, constructionMask) != null)
-                {
-                    newpos.x = newpos.x + UnityEngine.Random.Range(-0.2f, 0.2f);
-                    newpos.y = newpos.y + UnityEngine.Random.Range(-0.1f, 0.1f);
-                    newpos.z = newpos.z + UnityEngine.Random.Range(-0.2f, 0.2f);
-#if DEBUG
-                    Interface.Oxide.LogInfo($"  trying new position {newpos.ToString()}");
-#endif
-                    if(Physics.Raycast(newpos, Vector3Down, out hitinfo, 0.1f, groundLayer))
-                    {
-#if DEBUG
-                        Interface.Oxide.LogInfo($"  found ground or construction at {newpos.ToString()}");
-#endif
-                        break;
-                    }
-                    else
-                    {
-                        newpos.y = npc.locomotion.GetGroundY(newpos);
-#if DEBUG
-                        Interface.Oxide.LogInfo($"  fell through floor, relocating to {newpos.ToString()}");
-#endif
-                    }
-
-                    i++;
-                    if(i > 100) break;
-                }
-                npc.player.MovePosition(newpos);
+                Vector3 ev = new Vector3(UnityEngine.Random.Range(-npc.info.evdist, npc.info.evdist), 0f, UnityEngine.Random.Range(-2f, 2f));
+                npc.player.MovePosition(npc.player.transform.position + ev);
             }
 
             public bool IsSwimming()
             {
-                return WaterLevel.Test(npc.player.transform.position + new Vector3(0, 0.65f, 0), false, false);
-            }
-
-            public static bool checkChairPosition(Vector3 positionChair)
-            {
-                foreach (Vector3 newChairPosition in chairPosition)
-                {
-                    if (Vector3.Distance(positionChair, newChairPosition) <= 0.02f)
-                        return false;
-                }
-                return true;
+                return WaterLevel.Test(npc.player.transform.position + new Vector3(0, 0.65f, 0));
             }
 
             private bool CanSit()
@@ -659,22 +332,18 @@ namespace Oxide.Plugins
                 return npc.info.allowsit;
             }
 
-            public void Sit()
+     /*      public void Sit()
             {
                 npc.Invoke("AllowMove",0);
                 // Find a place to sit
-                List<BaseMountable> chairs = new List<BaseMountable>();
-                Vis.Entities<BaseMountable>(npc.player.transform.position, 15f, chairs);
-
-                List<BaseEntity> chairs2 = new List<BaseEntity>();
-                Vis.Entities<BaseEntity>(npc.player.transform.position, 15f, chairs2);
-
-                foreach (var mountable in chairs.Distinct().ToList().Where(n => n.AnyMounted() == false))
+                List<BaseChair> chairs = new List<BaseChair>();
+                Vis.Entities<BaseChair>(npc.player.transform.position, 15f, chairs);
+                foreach(var mountable in chairs.Distinct().ToList())
                 {
-#if DEBUG             
+#if DEBUG
                     Interface.Oxide.LogInfo($"HumanNPC {npc.player.displayName} trying to sit...");
 #endif
-                    if (mountable.AnyMounted() || mountable.mountAnchor == null || HumanLocomotion.allChairs.Contains(mountable) || !checkChairPosition(mountable.transform.position))
+                    if(mountable.IsMounted())
                     {
 #if DEBUG
                         Interface.Oxide.LogInfo($"Someone is sitting here.");
@@ -684,38 +353,18 @@ namespace Oxide.Plugins
 #if DEBUG
                     Interface.Oxide.LogInfo($"Found an empty chair.");
 #endif
-                    if (mountable is BaseChair)
-                    {
-                        sitting = true;
-                        mountable.MountPlayer(npc.player);
-                        //npc.player.MovePosition(mountable.mountAnchor.transform.position);
-                        //npc.player.transform.rotation = mountable.mountAnchor.transform.rotation;
-                        //npc.player.ServerRotation = mountable.mountAnchor.transform.rotation;
-                        npc.player.OverrideViewAngles(mountable.mountAnchor.transform.rotation.eulerAngles);
-                        npc.player.eyes.NetworkUpdate(mountable.mountAnchor.transform.rotation);
-                        npc.player.ClientRPCPlayer<Vector3>(null, npc.player, "ForcePositionTo", npc.player.transform.position);
-                        if (!allChairs.Contains(mountable))
-                            allChairs.Add(mountable);
-                        if (!chairPosition.Contains(mountable.transform.position))
-                            chairPosition.Add(mountable.transform.position);
-                        //mountable.SetFlag(BaseEntity.Flags.Busy, true, true);
-                        break;
-                    }
-                    else if (mountable is BaseVehicle && (mountable.name != null && mountable.name.Contains("sofa")))
-                    {
-                        sitting = true;
-                        (mountable as BaseVehicle).WantsMount(npc.player);
-                        npc.player.OverrideViewAngles(mountable.mountAnchor.transform.rotation.eulerAngles);
-                        npc.player.eyes.NetworkUpdate(mountable.mountAnchor.transform.rotation);
-                        npc.player.ClientRPCPlayer<Vector3>(null, npc.player, "ForcePositionTo", npc.player.transform.position);
-                        if (!allChairs.Contains(mountable))
-                            allChairs.Add(mountable);
-                        if (!chairPosition.Contains(mountable.transform.position))
-                            chairPosition.Add(mountable.transform.position);
-                        break;
-                    }
+                    mountable.MountPlayer(npc.player);
+                    //npc.player.MovePosition(mountable.mountAnchor.transform.position);
+                    //npc.player.transform.rotation = mountable.mountAnchor.transform.rotation;
+                    //npc.player.ServerRotation = mountable.mountAnchor.transform.rotation;
+                    npc.player.OverrideViewAngles(mountable.mountAnchor.transform.rotation.eulerAngles);
+                    npc.player.eyes.NetworkUpdate(mountable.mountAnchor.transform.rotation);
+                    npc.player.ClientRPCPlayer<Vector3>(null, npc.player, "ForcePositionTo", npc.player.transform.position);
+                    mountable.SetFlag(BaseEntity.Flags.Busy, true, false);
+                    sitting = true;
+                    break;
                 }
-            }
+            } */
 
             public void Stand()
             {
@@ -730,10 +379,6 @@ namespace Oxide.Plugins
                     mounted.DismountPlayer(npc.player);
                     mounted.SetFlag(BaseEntity.Flags.Busy, false, false);
                     sitting = false;
-                    if (allChairs.Contains(mounted))
-                        allChairs.Remove(mounted);
-                    if (chairPosition.Contains(mounted.transform.position))
-                        chairPosition.Remove(mounted.transform.position);
                 }
             }
 
@@ -757,7 +402,7 @@ namespace Oxide.Plugins
 
                 if(CanSit() && sitting == false)
                 {
-                    Sit();
+              //      Sit();
                 }
 
                 LastPos = Vector3.zero;
@@ -778,21 +423,17 @@ namespace Oxide.Plugins
                     shouldMove = false;
                     return;
                 }
-                
-		
-				currentWaypoint++;
+                currentWaypoint++;
+
                 var wp = cachedWaypoints[currentWaypoint];
-
                 SetMovementPoint(npc.player.transform.position, wp.Position, GetSpeed(wp.Speed));
-
-                if (NoMoveInfo.ContainsKey(wp.Position))
+                if (npc.player.transform.position == wp.Position)
                 {
                     npc.DisableMove();
-                    npc.Invoke("AllowMove", NoMoveInfo[wp.Position]);
+                    npc.Invoke("AllowMove", GetSpeed(wp.Speed));
                     return;
                 }
-			
-		}
+            }
 
             public void SetMovementPoint(Vector3 startpos, Vector3 endpos, float s)
             {
@@ -847,8 +488,7 @@ namespace Oxide.Plugins
 #endif
                 if (entity != null && entity.IsAlive())
                 {
-                    //var c_attackDistance = Vector3.Distance(entity.transform.position, npc.player.transform.position);
-                    var c_attackDistance = Vector3.Distance(entity.transform.position + new Vector3(0, 1.6f, 0), npc.player.transform.position + new Vector3(0, 1.6f, 0));
+                    var c_attackDistance = Vector3.Distance(entity.transform.position, npc.player.transform.position);
                     shouldMove = false;
 
                     bool validAttack = Vector3.Distance(LastPos, npc.player.transform.position) < npc.info.maxDistance && noPath < 5;
@@ -858,15 +498,7 @@ namespace Oxide.Plugins
 #endif
                     if (validAttack)
                     {
-                        bool range = false;
-                        if(npc.info.follow)
-                        {
-                            range = c_attackDistance < npc.info.damageDistance;
-                        }
-                        else
-                        {
-                            range = c_attackDistance < npc.info.maxDistance;
-                        }
+                        var range = c_attackDistance < npc.info.damageDistance;
                         var see = CanSee(npc, entity);
 #if DEBUG
                         Interface.Oxide.LogInfo("  validAttack Entity: Type {0}, ranged {1}, cansee {2}", entity.GetType().FullName, range, see);
@@ -879,9 +511,6 @@ namespace Oxide.Plugins
                         if (GetSpeed() <= 0)
                         {
                             npc.EndAttackingEntity();
-                        }
-                        else if(!npc.info.follow)
-                        {
                         }
                         else
                         {
@@ -901,33 +530,20 @@ namespace Oxide.Plugins
 
             public void ProcessFollow(Vector3 target)
             {
-#if DEBUG
-                Interface.Oxide.LogInfo($"ProcessFollow() called for {target.ToString()}");
-#endif
                 var c_followDistance = Vector3.Distance(target, npc.player.transform.position);
                 shouldMove = false;
-#if DEBUG
-                Interface.Oxide.LogInfo($"ProcessFollow() distance {c_followDistance.ToString()}");
-#endif
-                //if (c_followDistance > 0)// && Vector3.Distance(LastPos, npc.player.transform.position) < followDistance)// && noPath < 5)
-				if (c_followDistance > followDistance && Vector3.Distance(LastPos, npc.player.transform.position) < npc.info.maxDistance && noPath < 5)
+                if (c_followDistance > followDistance && Vector3.Distance(LastPos, npc.player.transform.position) < npc.info.maxDistance && noPath < 5)
                 {
-                    Move(npc.player.transform.position, npc.info.speed);
+                    Move(npc.player.transform.position);
                 }
                 else
                 {
                     if (followEntity is BaseEntity)
                     {
-#if DEBUG
-                        Interface.Oxide.LogInfo($"ProcessFollow() bailing out - is BaseEntity");
-#endif
                         npc.EndFollowingEntity(noPath < 5);
                     }
                     else if (targetPosition != Vector3.zero)
                     {
-#if DEBUG
-                        Interface.Oxide.LogInfo($"ProcessFollow() bailing out");
-#endif
                         npc.EndGo(noPath < 5);
                     }
                 }
@@ -1069,20 +685,16 @@ namespace Oxide.Plugins
                 npc.LookTowards(target.transform.position);
 
                 var source = npc.player.transform.position + npc.player.GetOffset();
-                if(baseProjectile.MuzzlePoint != null)
-                {
+                if (baseProjectile.MuzzlePoint != null)
                     source += Quaternion.LookRotation(target.transform.position - npc.player.transform.position) * baseProjectile.MuzzlePoint.position;
-                }
                 var dir = (target.transform.position + npc.player.GetOffset() - source).normalized;
                 var vector32 = dir * (component.projectileVelocity * baseProjectile.projectileVelocityScale);
 
                 Vector3 hit;
                 RaycastHit raycastHit;
-                if(Vector3.Distance(npc.player.transform.position, target.transform.position) < 0.5)
-                {
+                if (Vector3.Distance(npc.player.transform.position, target.transform.position) < 0.5)
                     hit = target.transform.position + npc.player.GetOffset(true);
-                }
-                else if(!Physics.SphereCast(source, .01f, vector32, out raycastHit, float.MaxValue, targetLayer))
+                else if (!Physics.SphereCast(source, .01f, vector32, out raycastHit, float.MaxValue, targetLayer))
                 {
 #if DEBUG
                     Interface.Oxide.LogInfo("Attack failed: {0} - {1}", npc.player.displayName, attackEntity.name);
@@ -1092,7 +704,7 @@ namespace Oxide.Plugins
                 else
                 {
                     hit = raycastHit.point;
-                  //  target = raycastHit.GetCollider().GetComponent<BaseCombatEntity>();
+                    target = raycastHit.GetCollider().GetComponent<BaseCombatEntity>();
 #if DEBUG
                     Interface.Oxide.LogInfo("Attack failed: {0} - {1}", raycastHit.GetCollider().name, (Rust.Layer)raycastHit.GetCollider().gameObject.layer);
 #endif
@@ -1100,22 +712,20 @@ namespace Oxide.Plugins
                 }
                 baseProjectile.primaryMagazine.contents--;
                 npc.ForceSignalAttack();
-				
-				if(baseProjectile.MuzzlePoint != null)
-				{					
-					npc.LookTowards(target.transform.position);
-					Vector3 origin = baseProjectile.MuzzlePoint.transform.position - baseProjectile.MuzzlePoint.forward * 0.25f;
-					Vector3 vector3 = baseProjectile.MuzzlePoint.transform.forward;
-					vector32 = AimConeUtil.GetModifiedAimConeDirection(0.5f, vector3, true);
-					
-					Vector3 targetPos = origin + vector32 * 300f;
-					baseProjectile.MuzzlePoint.transform.position = baseProjectile.MuzzlePoint.forward * 0.25f;
 
-					if (!miss) ApplyDamage(target, target.transform.position, vector32, npc.player);
- 
-					baseProjectile.ServerUse(1f, 1f, baseProjectile.MuzzlePoint);
-				
-				}
+                if (miss)
+                {
+                    var aimCone = baseProjectile.GetAimCone();
+                    vector32 += Quaternion.Euler(UnityEngine.Random.Range((float)(-aimCone * 0.5), aimCone * 0.5f), UnityEngine.Random.Range((float)(-aimCone * 0.5), aimCone * 0.5f), UnityEngine.Random.Range((float)(-aimCone * 0.5), aimCone * 0.5f)) * npc.player.eyes.HeadForward();
+                }
+
+                Effect.server.Run(baseProjectile.attackFX.resourcePath, baseProjectile, StringPool.Get(baseProjectile.handBone), Vector3.zero, Vector3.forward);
+                var effect = new Effect();
+                effect.Init(Effect.Type.Projectile, source, vector32.normalized);
+                effect.scale = vector32.magnitude;
+                effect.pooledString = component.projectileObject.resourcePath;
+                effect.number = UnityEngine.Random.Range(0, 2147483647);
+                EffectNetwork.Send(effect);
 
                 Vector3 dest;
                 if (miss)
@@ -1127,26 +737,21 @@ namespace Oxide.Plugins
                 {
                     dest = target.transform.position;
                 }
-					   
+                var hitInfo = new HitInfo(npc.player, target, DamageType.Bullet, dmg, dest)
+                {
+                    DidHit = !miss,
+                    HitEntity = target,
+                    PointStart = source,
+                    PointEnd = hit,
+                    HitPositionWorld = dest,
+                    HitNormalWorld = -dir,
+                    WeaponPrefab = GameManager.server.FindPrefab(StringPool.Get(baseProjectile.prefabID)).GetComponent<AttackEntity>(),
+                    Weapon = (AttackEntity)firstWeapon,
+                    HitMaterial = StringPool.Get("Flesh")
+                };
+                target?.OnAttacked(hitInfo);
+                Effect.server.ImpactEffect(hitInfo);
             }
-
-		  private void ApplyDamage(BaseCombatEntity entity, Vector3 point, Vector3 normal, BaseCombatEntity target)
-		  {
-			float damageAmount = 15f * UnityEngine.Random.Range(0.9f, 1.1f);
-			if (entity is BasePlayer && (UnityEngine.Object) entity != (UnityEngine.Object) target)
-			  damageAmount *= 0.5f;
-
-			HitInfo info = new HitInfo((BaseEntity) target, (BaseEntity) entity, DamageType.Bullet, damageAmount, point);
-			entity.OnAttacked(info);
-			if (!(entity is BasePlayer) && !(entity is BaseNpc))
-			  return;
-			Effect.server.ImpactEffect(new HitInfo()
-			{
-			  HitPositionWorld = point,
-			  HitNormalWorld = -normal,
-			  HitMaterial = StringPool.Get("Flesh")
-			});
-		  }
 
             public void AttemptAttack(BaseCombatEntity entity)
             {
@@ -1165,7 +770,7 @@ namespace Oxide.Plugins
                         reloading = false;
                         if (npc.info.needsAmmo)
                         {
-                            weapon.TryReloadMagazine((IAmmoContainer)npc.player.inventory);
+                            weapon.primaryMagazine.Reload(npc.player);
                             npc.player.inventory.ServerUpdate(0f);
                         }
                         else
@@ -1188,7 +793,7 @@ namespace Oxide.Plugins
                 {
                     firstWeapon = npc.EquipFirstWeapon();
                     weapon = firstWeapon as BaseProjectile;
-                    npc.SetActive(new ItemId());
+                    npc.SetActive(0);
                 }
 
                 var attackitem = firstWeapon?.GetItem();
@@ -1235,10 +840,6 @@ namespace Oxide.Plugins
             public HumanLocomotion locomotion;
             public HumanTrigger trigger;
             public ProtectionProperties protection;
-			private HeldEntity heldEntity;
-			private readonly List<NpcSound> _queuedSounds = new List<NpcSound>();
-			private Coroutine QueuedRoutine { get; set; }
-            //public InstrumentKeyController instrument;
 
             public BasePlayer player;
 
@@ -1257,11 +858,6 @@ namespace Oxide.Plugins
                 player.displayName = info.displayName;
                 SetViewAngle(info.spawnInfo.rotation);
                 player.syncPosition = true;
-				if (info.permission != null)
-				{
-					if (info.permission != "" && info.permission.Contains("humannpc"))
-					ins.permission.RegisterPermission(info.permission, ins);
-				}
                 if (!update)
                 {
                     //player.xp = ServerMgr.Xp.GetAgent(info.userid);
@@ -1274,7 +870,6 @@ namespace Oxide.Plugins
                     var newEyes = info.spawnInfo.position + new Vector3(0, 1.6f, 0);
                     player.eyes.position.Set(newEyes.x, newEyes.y, newEyes.z);
                     player.EndSleeping();
-					if (info.playTune) PlayTune();
                     protection.Clear();
                     foreach (var pro in info.protections)
                         protection.Add(pro.Key, pro.Value);
@@ -1288,80 +883,6 @@ namespace Oxide.Plugins
                 AllowMove();
             }
 
-            public void QueueSound(NpcSound data)
-            {
-                _queuedSounds.Add(data);
-                if (QueuedRoutine == null)
-                {
-                    QueuedRoutine = InvokeHandler.Instance.StartCoroutine(RunTalker());
-                }
-            }
-			
-            private IEnumerator RunTalker()
-            {
-                while (_queuedSounds.Count != 0)
-                {
-                    NpcSound soundData = _queuedSounds[0];
-                    _queuedSounds.RemoveAt(0);
-
-                    foreach (byte[] data in soundData.Data)
-                    {
-						if (player == null) break;
-                        SendSound(player.net.ID, data);
-                        yield return new WaitForSeconds(0.07f);
-                    }
-
-                    yield return new WaitForSeconds(2f);
-                }
-				QueuedRoutine = null;
-				ins.NpcTalking.Remove(player.userID);
-            }
-		
-            private void SendSound(NetworkableId netId, byte[] data)
-            {
-
-                foreach (BasePlayer current in BasePlayer.activePlayerList)
-                {
-                    if (player == null) return;
-                    if (current == null) continue;
-                    float distance = Vector3.Distance(player.transform.position, current.transform.position);
-                    if (distance > 100) continue;
-                    if (current.IsConnected && Network.Net.sv.IsConnected())
-                    {
-                        NetWrite netWrite = Network.Net.sv.StartWrite();
-                        netWrite.PacketID(Network.Message.Type.VoiceData);
-                        netWrite.EntityID(netId);
-                        netWrite.BytesWithSize(data);
-                        netWrite.Send(new SendInfo(current.Connection)
-                        {
-                            priority = Network.Priority.Immediate
-                        });
-                    }
-                }
-            }
-
-            public void PlayTune()
-            {
-				ins.NextTick(() =>
-                {
-					heldEntity = GetCurrentWeapon();
-					if (heldEntity != null && heldEntity is InstrumentTool)
-					{
-						heldEntity.SetLightsOn(true);
-						InvokeRepeating("PlayNote", 0.01f, 0.01f);
-						heldEntity.SendNetworkUpdateImmediate(true);
-						player.SendNetworkUpdateImmediate(true);
-					}
-				});
-            }
-            public void PlayNote()
-            {
-				if (heldEntity != null && player != null && heldEntity is InstrumentTool)
-				{
-					heldEntity.ServerUse();
-				}
-            }
-			
             public void UpdateHealth(HumanNPCInfo info)
             {
                 player.InitializeHealth(info.health, info.health);
@@ -1370,7 +891,15 @@ namespace Oxide.Plugins
 
             public void Evade()
             {
-                this.locomotion.Evade();
+                if(player.IsSwimming()) return;
+                if(info.evade == false) return;
+#if DEBUG
+                Interface.Oxide.LogInfo("Evading...");
+#endif
+                Vector3 evade = new Vector3(UnityEngine.Random.Range(-info.evdist, info.evdist), 0f, UnityEngine.Random.Range(-2f, 2f));
+                //evade.y = player.transform.position.y;
+                player.MovePosition(player.transform.position + evade);
+//                locomotion?.Move(player.transform.position + evade);
             }
 
             public void AllowMove()
@@ -1401,7 +930,7 @@ namespace Oxide.Plugins
                 locomotion.attackEntity = null;
                 player.health = info.health;
                 locomotion.GetBackToLastPos();
-                SetActive(new ItemId());
+                SetActive(0);
             }
             public void EndFollowingEntity(bool trigger = true)
             {
@@ -1441,9 +970,9 @@ namespace Oxide.Plugins
                 if (locomotion.attackEntity != null && UnityEngine.Random.Range(0f, 1f) < 0.75f) return;
                 if (Interface.Oxide.CallHook("OnNPCStartTarget", player, entity) == null)
                 {
-                    var item = GetFirstWeaponItem();
-                    if (item != null)
-                        SetActive(item.uid);
+                    //var item = GetFirstWeaponItem();
+                    //if (item != null)
+                    //    SetActive(item.uid);
                     locomotion.attackEntity = entity;
                     locomotion.pathFinding = null;
 
@@ -1457,11 +986,8 @@ namespace Oxide.Plugins
                 }
             }
 
-            public void StartFollowingEntity(BaseEntity entity, string pname = "player")
+            public void StartFollowingEntity(BaseEntity entity)
             {
-#if DEBUG
-                Interface.Oxide.LogInfo($"StartFollowingEntity() called for {pname}");
-#endif
                 if (locomotion.targetPosition != Vector3.zero)
                 {
                     EndGo(false);
@@ -1471,7 +997,7 @@ namespace Oxide.Plugins
                 locomotion.pathFinding = null;
 
                 if (locomotion.LastPos == Vector3.zero) locomotion.LastPos = player.transform.position;
-//                if (IsInvoking("AllowMove")) { CancelInvoke("AllowMove"); AllowMove(); }
+                if (IsInvoking("AllowMove")) { CancelInvoke("AllowMove"); AllowMove(); }
                 locomotion.Invoke("PathFinding", 0);
             }
 
@@ -1510,10 +1036,8 @@ namespace Oxide.Plugins
             {
                 foreach (Item item in player.inventory.containerBelt.itemList)
                 {
-                    if(item.CanBeHeld() && HasAmmo(item) && (item.info.category == ItemCategory.Weapon))
-                    {
+                    if (item.CanBeHeld() && HasAmmo(item) && (item.info.category == ItemCategory.Weapon))
                         return item.GetHeldEntity() as HeldEntity;
-                    }
                 }
                 return null;
             }
@@ -1522,10 +1046,8 @@ namespace Oxide.Plugins
             {
                 foreach (Item item in player.inventory.containerBelt.itemList)
                 {
-                    if(item.CanBeHeld() && item.info.category == ItemCategory.Tool)
-                    {
+                    if (item.CanBeHeld() && item.info.category == ItemCategory.Tool)
                         return item.GetHeldEntity() as HeldEntity;
-                    }
                 }
                 return null;
             }
@@ -1534,22 +1056,8 @@ namespace Oxide.Plugins
             {
                 foreach (Item item in player.inventory.containerBelt.itemList)
                 {
-                    if(item.CanBeHeld() && item.info.category != ItemCategory.Tool && item.info.category != ItemCategory.Weapon)
-                    {
+                    if (item.CanBeHeld() && item.info.category != ItemCategory.Tool && item.info.category != ItemCategory.Weapon)
                         return item.GetHeldEntity() as HeldEntity;
-                    }
-                }
-                return null;
-            }
-
-            public HeldEntity GetFirstInstrument()
-            {
-                foreach (Item item in player.inventory.containerBelt.itemList)
-                {
-                    if(item.CanBeHeld() && item.info.category == ItemCategory.Fun)
-                    {
-                        return item.GetHeldEntity() as HeldEntity;
-                    }
                 }
                 return null;
             }
@@ -1569,7 +1077,7 @@ namespace Oxide.Plugins
                 if (!info.needsAmmo) return true;
                 var weapon = item.GetHeldEntity() as BaseProjectile;
                 if (weapon == null) return true;
-                return weapon.primaryMagazine.contents > 0 || weapon.primaryMagazine.CanReload((IAmmoContainer) player.inventory);
+                return weapon.primaryMagazine.contents > 0 || weapon.primaryMagazine.CanReload(player);
             }
 
             public void UnequipAll()
@@ -1615,18 +1123,7 @@ namespace Oxide.Plugins
                 return misc;
             }
 
-            public HeldEntity EquipFirstInstrument()
-            {
-                HeldEntity misc = GetFirstInstrument();
-                if (misc != null)
-                {
-                    UnequipAll();
-                    misc.SetHeld(true);
-                }
-                return misc;
-            }
-
-            public void SetActive(ItemId id)
+            public void SetActive(uint id)
             {
                 player.svActiveItemID = id;
                 player.SendNetworkUpdate();
@@ -1635,7 +1132,6 @@ namespace Oxide.Plugins
 
             private void OnDestroy()
             {
-                locomotion.Stand();
                 Destroy(locomotion);
                 Destroy(trigger);
                 Destroy(protection);
@@ -1645,9 +1141,7 @@ namespace Oxide.Plugins
             {
                 if (pos != player.transform.position)
                     SetViewAngle(Quaternion.LookRotation(pos - player.transform.position));
-					//player.transform.LookAt(pos - player.transform.position);
-					player.eyes.position.Set(pos.x, pos.y, pos.z);
-			}
+            }
 
             public void ForceSignalGesture()
             {
@@ -1662,7 +1156,7 @@ namespace Oxide.Plugins
             public void SetViewAngle(Quaternion viewAngles)
             {
                 if (viewAngles.eulerAngles == default(Vector3)) return;
-                player.viewAngles = viewAngles.eulerAngles;
+             //   player.viewAngles = viewAngles.eulerAngles;
                 player.SendNetworkUpdate();
             }
         }
@@ -1701,16 +1195,8 @@ namespace Oxide.Plugins
             public bool needsAmmo;
             public bool defend;
             public bool evade;
-            public bool follow;
             public float evdist;
             public bool allowsit;
-            public string musician;
-			public bool playTune;
-			public bool SoundOnEnter;
-			public bool SoundOnUse;
-            public float band = 0f;
-			public string permission = "";
-			public string Sound = "";
             public List<string> message_hello;
             public List<string> message_bye;
             public List<string> message_use;
@@ -1740,18 +1226,9 @@ namespace Oxide.Plugins
                 stopandtalkSeconds = 3;
                 enable = true;
                 lootable = true;
-                defend = false;
-                evade = false;
-                evdist = 0f;
-                follow = true;
-                allowsit = false;
                 damageInterval = 2;
-				playTune = false;
-
-                for(var i = 0; i < (int)DamageType.LAST; i++)
-                {
+                for (var i = 0; i < (int)DamageType.LAST; i++)
                     protections[(DamageType)i] = 0f;
-                }
             }
 
             public HumanNPCInfo Clone(ulong userid)
@@ -1777,12 +1254,9 @@ namespace Oxide.Plugins
                     lootable = lootable,
                     defend = defend,
                     evade = evade,
-                    follow = follow,
                     evdist = evdist,
                     allowsit = allowsit,
                     damageInterval = damageInterval,
-					permission = permission,
-					Sound = Sound,
                     message_hello = message_hello?.ToList(),
                     message_bye = message_bye?.ToList(),
                     message_use = message_use?.ToList(),
@@ -1791,9 +1265,6 @@ namespace Oxide.Plugins
                     needsAmmo = needsAmmo,
                     hitchance = hitchance,
                     reloadDuration = reloadDuration,
-					playTune = playTune,
-					SoundOnEnter = SoundOnEnter,
-					SoundOnUse = SoundOnUse,
                     protections = protections?.ToDictionary(p => p.Key, p => p.Value)
                 };
             }
@@ -1826,79 +1297,26 @@ namespace Oxide.Plugins
 
         private static Dictionary<string, BaseProjectile> weaponProjectile = new Dictionary<string, BaseProjectile>();
 
+        protected override void LoadDefaultConfig()
+        {
+        }
+
+        private void CheckCfg<T>(string Key, ref T var)
+        {
+            if (Config[Key] is T)
+                var = (T)Config[Key];
+            else
+                Config[Key] = var;
+        }
+
         private void Init()
         {
             ammoTypes = new Dictionary<string, AmmoTypes>();
             weaponProjectile = new Dictionary<string, BaseProjectile>();
-			chat = configData.settings.Chat;
-			TeamsNPC = configData.settings.NpcInTeams;
-			RadiusNPC = configData.settings.NpcUseRadius;
-			if (configData.settings.NpcUseRadius <= 0) { configData.settings.NpcUseRadius = 5.0f; SaveConfig(); }
-            LoadData();
+            CheckCfg("Chat", ref chat);
+            SaveConfig();
         }
 
-        #region Config 	
-        private ConfigData configData;
-        class ConfigData
-        {
-
-            [JsonProperty(PropertyName = "Settings")]
-            public Settings settings { get; set; }
-			
-            public class Settings
-            {
-				public string Chat{ get; set; }
-				public bool NpcInTeams { get; set; }
-				public float NpcUseRadius { get; set; }
-			}					
-           
-            public Oxide.Core.VersionNumber Version { get; set; }
-        }
-
-        protected override void LoadConfig()
-        {
-            base.LoadConfig();
-            configData = Config.ReadObject<ConfigData>();
-
-            if (configData.Version < Version)
-                UpdateConfigValues();
-
-            Config.WriteObject(configData, true);
-        }
-
-        protected override void LoadDefaultConfig() => configData = GetBaseConfig();
-
-        private ConfigData GetBaseConfig()
-        {
-            return new ConfigData
-            {
-                settings = new ConfigData.Settings
-                {
-					Chat = "<color=#FA58AC>{0}:</color> ",
-					NpcInTeams = false,
-					NpcUseRadius = 5.0f
-				},	 			 
-							
-					Version = Version
-            };
-        }
-
-        protected override void SaveConfig() => Config.WriteObject(configData, true);
-
-        private void UpdateConfigValues()
-        {
-            PrintWarning("Config update detected! Updating config values...");
-
-            ConfigData baseConfig = GetBaseConfig();
-
-            if (configData.Version < new VersionNumber(1, 0, 4))
-                configData = baseConfig;
-
-            configData.Version = Version;
-            PrintWarning("Config update completed!");
-        }
-        #endregion
-		
         private static bool GetBoolValue(string value)
         {
             if (value == null) return false;
@@ -1912,20 +1330,26 @@ namespace Oxide.Plugins
                 case "y":
                 case "on":
                     return true;
+
                 default:
                     return false;
             }
         }
 
+        private void Loaded()
+        {
+            LoadData();
+
+            var filter = RustExtension.Filter.ToList();
+            filter.Add("Look rotation viewing vector is zero");
+            RustExtension.Filter = filter.ToArray();
+        }
+
         private void Unload()
         {
-            if (QueuedSpawn != null)
-                InvokeHandler.Instance.StopCoroutine(QueuedSpawn);
-
             var HumanNPCMono = UnityEngine.Object.FindObjectsOfType<HumanPlayer>();
             foreach (var mono in HumanNPCMono)
             {
-                mono.locomotion.Stand();
                 PrintWarning($"Deleting {mono.info.displayName} ({mono.info.userid})");
                 mono.GetComponent<BasePlayer>().Kill();
             }
@@ -1936,11 +1360,6 @@ namespace Oxide.Plugins
                 UnityEngine.Object.Destroy(gameObj);
             }
             SaveData();
-			
-			foreach (var team in PlayersTeams)
-			{
-				RelationshipManager.ServerInstance.DisbandTeam(team.Value);
-			}
         }
 
         private void SaveData()
@@ -1952,7 +1371,7 @@ namespace Oxide.Plugins
 
         private void LoadData()
         {
-            data = Interface.Oxide.DataFileSystem.GetFile(Name + "/NpcData");
+            data = Interface.Oxide.DataFileSystem.GetFile(nameof(HumanNPC));
             data.Settings.ReferenceLoopHandling = ReferenceLoopHandling.Ignore;
             data.Settings.Converters = new JsonConverter[] { new SpawnInfoConverter(), new UnityQuaternionConverter(), new UnityVector3Converter() };
 
@@ -1979,11 +1398,7 @@ namespace Oxide.Plugins
         //////////////////////////////////////////////////////
         private void OnServerInitialized()
         {
-            if (QueuedSpawn != null)
-                InvokeHandler.Instance.StopCoroutine(QueuedSpawn);
-
-            ins = this;
-            colBuffer = Vis.colBuffer;
+         //   colBuffer = Vis.colBuffer;
             eyesPosition = new Vector3(0f, 0.5f, 0f);
             Vector3Down = new Vector3(0f, -1f, 0f);
             PathFinding = (PathFinding)plugins.Find(nameof(PathFinding));
@@ -2004,20 +1419,7 @@ namespace Oxide.Plugins
                 }
             }
 
-            //RefreshAllNPC();
-            RespawnAllNpc();
-        }
-
-        private void RespawnAllNpc() => QueuedSpawn = InvokeHandler.Instance.StartCoroutine(respawnAllNPC());
-
-        private IEnumerator respawnAllNPC()
-        {
-            foreach (KeyValuePair<ulong, HumanNPCInfo> pair in humannpcs)
-            {
-                if (!pair.Value.enable) continue;
-                SpawnOrRefresh(pair.Key);
-                yield return new WaitForSeconds(0.2f);
-            }
+            RefreshAllNPC();
         }
 
         //////////////////////////////////////////////////////
@@ -2032,8 +1434,6 @@ namespace Oxide.Plugins
         /// OnPlayerInput(BasePlayer player, InputState input)
         /// Called when a plugin presses a button
         //////////////////////////////////////////////////////
-
-
         private void OnPlayerInput(BasePlayer player, InputState input)
         {
             if (!input.WasJustPressed(BUTTON.USE)) return;
@@ -2042,80 +1442,31 @@ namespace Oxide.Plugins
 #endif
             Quaternion currentRot;
             TryGetPlayerView(player, out currentRot);
-            var hitpoints = Physics.RaycastAll(new Ray(player.transform.position + eyesPosition, currentRot * Vector3.forward), RadiusNPC, playerLayer);
+            var hitpoints = Physics.RaycastAll(new Ray(player.transform.position + eyesPosition, currentRot * Vector3.forward), 5f, playerLayer);
             Array.Sort(hitpoints, (a, b) => a.distance == b.distance ? 0 : a.distance > b.distance ? 1 : -1);
             for (var i = 0; i < hitpoints.Length; i++)
             {
 #if DEBUG
-                Interface.Oxide.LogInfo("Raycast: {0} ({1})", player.displayName, hitpoints[i].collider.name);
+                Interface.Oxide.LogInfo("Raycast: {0}", hitpoints[i].collider.name);
 #endif
                 var humanPlayer = hitpoints[i].collider.GetComponentInParent<HumanPlayer>();
                 if (humanPlayer != null)
                 {
-					if (humanPlayer.info.permission != null && humanPlayer.info.permission != "")
-					{
-						if (permission.UserHasPermission(player.UserIDString, humanPlayer.info.permission))
-						{					
-							if(humanPlayer.locomotion.sitting)
-							{
-								humanPlayer.locomotion.Stand();
-							}
-							if (humanPlayer.info.stopandtalk && humanPlayer.locomotion.attackEntity == null)
-							{
-								humanPlayer.LookTowards(player.transform.position);
-								humanPlayer.TemporaryDisableMove();
-							}
-							if (humanPlayer.info.message_use != null && humanPlayer.info.message_use.Count != 0)
-							{
-								SendMessage(humanPlayer, player, GetRandomMessage(humanPlayer.info.message_use));
-							}
-							Interface.Oxide.CallHook("OnUseNPC", humanPlayer.player, player);
-							if (!string.IsNullOrEmpty(humanPlayer.info.Sound))
-							{
-								if (humanPlayer.info.SoundOnUse)
-								{
-									if (NpcTalking.Contains(humanPlayer.player.userID)) return;
-									if (FileExists(humanPlayer.info.Sound))
-									{
-										NpcTalking.Add(humanPlayer.player.userID);											
-										humanPlayer.QueueSound(LoadDataSound(humanPlayer.info.Sound));
-									}
-								}
-							}
-							break;
-						}
-						else break;
-					}
-					else
-					{
-						if(humanPlayer.locomotion.sitting)
-						{
-							humanPlayer.locomotion.Stand();
-						}
-						if (humanPlayer.info.stopandtalk && humanPlayer.locomotion.attackEntity == null)
-						{
-							humanPlayer.LookTowards(player.transform.position);
-							humanPlayer.TemporaryDisableMove();
-						}
-						if (humanPlayer.info.message_use != null && humanPlayer.info.message_use.Count != 0)
-						{
-							SendMessage(humanPlayer, player, GetRandomMessage(humanPlayer.info.message_use));
-						}
-						Interface.Oxide.CallHook("OnUseNPC", humanPlayer.player, player);
-							if (!string.IsNullOrEmpty(humanPlayer.info.Sound))
-							{
-								if (humanPlayer.info.SoundOnUse)
-								{
-									if (NpcTalking.Contains(humanPlayer.player.userID)) return;
-									if (FileExists(humanPlayer.info.Sound))
-									{
-										NpcTalking.Add(humanPlayer.player.userID);	
-										humanPlayer.QueueSound(LoadDataSound(humanPlayer.info.Sound));
-									}
-								}
-							}						
-						break;					
-					}
+                    if(humanPlayer.locomotion.sitting)
+                    {
+                        humanPlayer.locomotion.Stand();
+                    }
+                    if (humanPlayer.info.stopandtalk && humanPlayer.locomotion.attackEntity == null)
+                    {
+                        humanPlayer.LookTowards(player.transform.position);
+                        humanPlayer.TemporaryDisableMove();
+                    }
+                    if (humanPlayer.info.message_use != null && humanPlayer.info.message_use.Count != 0)
+                    {
+                        SendMessage(humanPlayer, player, GetRandomMessage(humanPlayer.info.message_use));
+                    }
+                    Interface.Oxide.CallHook("OnUseNPC", humanPlayer.player, player);
+                    break;
                 }
             }
         }
@@ -2126,35 +1477,16 @@ namespace Oxide.Plugins
         //////////////////////////////////////////////////////
         private void OnEntityTakeDamage(BaseCombatEntity entity, HitInfo hitinfo)
         {
-            if (entity == null || hitinfo == null || entity.IsNpc) return;
             var humanPlayer = entity.GetComponent<HumanPlayer>();
             if(humanPlayer != null)
             {
-
-				if (hitinfo?.Initiator != null && hitinfo.Initiator.ToString().Contains("fireball") && humanPlayer.info.invulnerability)
-				{
-                    hitinfo.DoHitEffects = false; 
-					hitinfo.damageTypes?.ScaleAll(0);
-					return;
-				}
-
-				if (hitinfo?.Initiator != null && (BaseCombatEntity)hitinfo?.Initiator == entity)
-				{
-                    hitinfo.damageTypes = new DamageTypeList();
-                    hitinfo.DoHitEffects = false;
-                    hitinfo.HitMaterial = 0;
-					hitinfo.damageTypes?.ScaleAll(0);				
-					return;
-				}
 #if DEBUG
                 Interface.Oxide.LogInfo($"OnEntityTakeDamage(by {entity.name})");
 #endif
-				
-                if(hitinfo?.Initiator != null && hitinfo.Initiator is BaseCombatEntity && !(hitinfo.Initiator is Barricade) && humanPlayer.info.defend)
-                {	
-						humanPlayer.StartAttackingEntity((BaseCombatEntity)hitinfo.Initiator);
-				}
-
+                if(hitinfo.Initiator is BaseCombatEntity && !(hitinfo.Initiator is Barricade) && humanPlayer.info.defend)
+                {
+                    humanPlayer.StartAttackingEntity((BaseCombatEntity)hitinfo.Initiator);
+                }
                 if(humanPlayer.info.message_hurt != null && humanPlayer.info.message_hurt.Count != 0)
                 {
                     if(hitinfo.InitiatorPlayer != null)
@@ -2162,18 +1494,16 @@ namespace Oxide.Plugins
                         SendMessage(humanPlayer, hitinfo.InitiatorPlayer, GetRandomMessage(humanPlayer.info.message_hurt));
                     }
                 }
-
-				Interface.Oxide.CallHook("OnHitNPC", entity.GetComponent<BaseCombatEntity>(), hitinfo);
+                Interface.Oxide.CallHook("OnHitNPC", entity.GetComponent<BaseCombatEntity>(), hitinfo);
                 if(humanPlayer.info.invulnerability)
                 {
                     hitinfo.damageTypes = new DamageTypeList();
                     hitinfo.DoHitEffects = false;
                     hitinfo.HitMaterial = 0;
-					hitinfo.damageTypes.ScaleAll(0);
                 }
                 else
                 {
-                    humanPlayer.protection.Scale(hitinfo?.damageTypes);
+                    humanPlayer.protection.Scale(hitinfo.damageTypes);
                 }
 
                 if(humanPlayer.locomotion.sitting)
@@ -2189,28 +1519,12 @@ namespace Oxide.Plugins
         /// OnEntityDeath(BaseEntity entity, HitInfo hitinfo)
         /// Called when an entity gets killed (can be anything, building, animal, player ..)
         //////////////////////////////////////////////////////
-		object CanDropActiveItem(BasePlayer player)
-		{
-			var humanPlayer = player.GetComponent<HumanPlayer>();
-            if (humanPlayer?.info == null) return null;
-			{
-				if (!humanPlayer.info.lootable)
-				return false;
-			}
-			return null;
-		}
-
         private void OnEntityDeath(BaseEntity entity, HitInfo hitinfo)
         {
             var humanPlayer = entity.GetComponent<HumanPlayer>();
             if (humanPlayer?.info == null) return;
             if (!humanPlayer.info.lootable)
             {
-				if (humanPlayer.player.inventory != null)
-				foreach(var item in humanPlayer.player.inventory.containerBelt.itemList)
-                {
-                    item?.Remove();
-                }
                 humanPlayer.player.inventory?.Strip();
             }
             var player = hitinfo?.InitiatorPlayer;
@@ -2230,56 +1544,14 @@ namespace Oxide.Plugins
             }
         }
 
-		private void CreatNpcTeam(BasePlayer player)
-		{	
-					RelationshipManager.ServerInstance.playerToTeam.Remove(player.userID);
-					player.ClearTeam();		
-					RelationshipManager.PlayerTeam team = RelationshipManager.ServerInstance.CreateTeam();
-					RelationshipManager.PlayerTeam playerTeam = team;
-					playerTeam.teamLeader = player.userID;
-
-					if (!playerTeam.AddPlayer(player))
-					{
-						player.currentTeam = playerTeam.teamID;
-						playerTeam.members.Add(player.userID);
-						PlayersTeams.Add(player.currentTeam, team);
-						player.SendNetworkUpdate(BasePlayer.NetworkQueue.Update);
-					}
-
-		}
-
-		private void AddNpcTeam(BasePlayer player, BasePlayer teamPlayer)
-		{
-			if (teamPlayer.currentTeam != null && teamPlayer.currentTeam != 0UL)
-			{
-				RelationshipManager.ServerInstance.playerToTeam.Remove(player.userID);
-				player.ClearTeam();
-				player.SendNetworkUpdate(BasePlayer.NetworkQueue.Update);
-				
-				RelationshipManager.PlayerTeam team = RelationshipManager.ServerInstance.teams[teamPlayer.currentTeam];
-				RelationshipManager.PlayerTeam playerTeam = team;
-					if (!playerTeam.AddPlayer(player))
-					{
-						player.currentTeam = playerTeam.teamID;
-						playerTeam.members.Add(player.userID);
-						player.SendNetworkUpdate(BasePlayer.NetworkQueue.Update);
-					}
-			}
-		}
-		
         private object CanLootPlayer(BasePlayer target, BasePlayer looter)
         {
-            try
+            var humanPlayer = target.GetComponent<HumanPlayer>();
+            if (humanPlayer != null && !humanPlayer.info.lootable)
             {
-                var humanPlayer = target.GetComponent<HumanPlayer>();
-                if (humanPlayer != null && !humanPlayer.info.lootable)
-                {
-					
-                    NextTick(looter.EndLooting);
-                    return false;
-                }
+                NextTick(looter.EndLooting);
+                return false;
             }
-            catch {}
             return null;
         }
 
@@ -2362,7 +1634,7 @@ namespace Oxide.Plugins
             }
             else RefreshNPC(findplayer, false);
         }
-		
+
         private void SpawnNPC(ulong userid, bool isediting)
         {
             HumanNPCInfo info;
@@ -2377,32 +1649,7 @@ namespace Oxide.Plugins
             cache[userid] = humanPlayer;
             UpdateInventory(humanPlayer);
             Interface.Oxide.CallHook("OnNPCRespawn", newPlayer);
-			if (!TeamsNPC) PrintWarning($"Spawned NPC: {userid}");
-			
-			if (TeamsNPC)
-			{
-				if (!NewTeam)
-				{
-					NewTeam = true;
-					TeamPlayer = newPlayer;
-					TeamCount++;
-					CreatNpcTeam(newPlayer);
-					PrintWarning($"Spawned NPC: {userid} and made team leader");				
-				}
-				else if (TeamCount <= 7 && TeamPlayer != null)
-				{
-					TeamCount++;
-					AddNpcTeam(newPlayer, TeamPlayer);
-					PrintWarning($"Spawned NPC: {userid} and added to team");				
-				}
-				else
-				{
-					TeamCount = 1;
-					TeamPlayer = newPlayer;
-					CreatNpcTeam(newPlayer);
-					PrintWarning($"Spawned NPC: {userid} team full creating another team");							
-				}
-			}
+            Puts($"Spawned NPC: {userid}");
         }
 
         private void UpdateInventory(HumanPlayer humanPlayer)
@@ -2413,10 +1660,8 @@ namespace Oxide.Plugins
             {
                 //player.inventory.Strip();
                 Kits?.Call("GiveKit", humanPlayer.player, humanPlayer.info.spawnkit);
-                if (humanPlayer.EquipFirstWeapon() == null && humanPlayer.EquipFirstTool() == null)// && humanPlayer.EquipFirstInstrument() == null)
-                {
+                if (humanPlayer.EquipFirstWeapon() == null && humanPlayer.EquipFirstTool() == null)
                     humanPlayer.EquipFirstMisc();
-                }
             }
             /*player.SV_ClothingChanged();
             if (humanPlayer.info.protections != null)
@@ -2442,7 +1687,7 @@ namespace Oxide.Plugins
             KillNpc(player);
             if (!info.enable && !isediting)
             {
-               // Puts($"NPC was killed because he is disabled: {player.userID}");
+                Puts($"NPC was killed because he is disabled: {player.userID}");
                 return;
             }
             SpawnOrRefresh(player.userID);
@@ -2455,7 +1700,7 @@ namespace Oxide.Plugins
             if (!info.enable && !isediting)
             {
                 KillNpc(player);
-               // Puts($"NPC was killed because he is disabled: {player.userID}");
+                Puts($"NPC was killed because he is disabled: {player.userID}");
                 return;
             }
             if (player.GetComponent<HumanPlayer>() != null)
@@ -2463,20 +1708,13 @@ namespace Oxide.Plugins
             var humanplayer = player.gameObject.AddComponent<HumanPlayer>();
             humanplayer.SetInfo(info, true);
             cache[player.userID] = humanplayer;
-           // Puts("Refreshed NPC: " + player.userID);
+            Puts("Refreshed NPC: " + player.userID);
         }
 
-		private object CreateNPCHook(Vector3 position, Quaternion currentRot, string name = "NPC", ulong clone = 0, bool saved = true)
-        {
-            HumanPlayer humanPlayer = CreateNPC(position, currentRot, name, clone, saved);
-			if (humanPlayer == null) return null;
-			return humanPlayer.player;
-        }
-		
-        public HumanPlayer CreateNPC(Vector3 position, Quaternion currentRot, string name = "NPC", ulong clone = 0, bool saved = true)
+        public HumanPlayer CreateNPC(Vector3 position, Quaternion currentRot, string name = "NPC", ulong clone = 0)
         {
             HumanNPCInfo npcInfo = null;
-            var userId = (EncryptedValue<ulong>) (ulong)UnityEngine.Random.Range(41234564, 11474836478);
+            var userId = (ulong)UnityEngine.Random.Range(0, 2147483647);
             if (clone != 0)
             {
                 HumanNPCInfo tempInfo;
@@ -2492,7 +1730,7 @@ namespace Oxide.Plugins
 
             humannpcs[userId] = npcInfo;
             storedData.HumanNPCs.Add(npcInfo);
-            save = saved;
+            save = true;
 
             SpawnNPC(userId, true);
 
@@ -2554,14 +1792,13 @@ namespace Oxide.Plugins
             return true;
         }
 
-/*        private static bool CanSee(HumanPlayer npc, BaseEntity target)
+        private static bool CanSee(HumanPlayer npc, BaseEntity target)
         {
 #if DEBUG
             Interface.Oxide.LogInfo($"CanSee(): {npc.transform.position} looking at {target.transform.position}");
 #endif
             var source = npc.player;
-			if (source == target) return false;
-			var weapon = source.GetActiveItem()?.GetHeldEntity() as BaseProjectile;
+            var weapon = source.GetActiveItem()?.GetHeldEntity() as BaseProjectile;
             var pos = source.transform.position + source.GetOffset();
             if(weapon?.MuzzlePoint != null)
             {
@@ -2577,14 +1814,6 @@ namespace Oxide.Plugins
 #endif
             }
 
-			//if(Physics.Linecast(source.transform.position + new Vector3(0, 1.6f, 0), target.transform.position + new Vector3(0, 1.6f, 0), obstructionMask))
-			if(Physics.Linecast(source.transform.position, target.transform.position, obstructionMask))
-            {
-#if DEBUG
-                Interface.Oxide.LogInfo($"CanSee(): Blocked by some obstruction.");
-#endif
-                return false;
-            }
             if(Vector3.Distance(source.transform.position, target.transform.position) <  npc.info.damageDistance)
             {
 #if DEBUG
@@ -2623,35 +1852,7 @@ namespace Oxide.Plugins
 #endif
             return false;
         }
-*/
 
-		private static bool CanSee(HumanPlayer npc, BaseEntity target1)
-        {
-            var source = npc.player;
-             RaycastHit raycastHit;
-			 var target = target1 as BasePlayer;
-			 var weapon = source.GetActiveItem()?.GetHeldEntity() as BaseProjectile;
-			 if (weapon?.MuzzlePoint == null) return Vector3.Distance(source.transform.position, target1.transform.position) < 0.75;
-			 if (target == null) return Vector3.Distance(source.transform.position, target1.transform.position) < 90f;
-             var pos = source.eyes.position + source.GetOffset();
-             var rayDirection = (target.transform.position + target.GetOffset() - new Vector3(0, 0.7f, 0)) - source.eyes.position;
-			 if(!IsLayerBlocked(target.transform.position, 10f, obstructionMask))
-             {
-                npc.Evade();
-             }
-             if (Vector3.Distance(source.transform.position, target.transform.position) < 1f) // really close (front or behind), CanSee = true. If you want npc to hate being approached from too close
-                 return true;
-             if (Vector3.Angle(rayDirection, source.eyes.HeadForward()) < npc.info.attackDistance) // in the 180 front cone, CanSee = true
-             { // Detect if player is within the field of view
-                 if (Physics.Raycast(pos, rayDirection, out raycastHit))
-                 {
-                     if (raycastHit.GetCollider().GetComponent<BasePlayer>() == target)
-                         return true;
-                 }
-             }
-             return false;
-        }
-		
         private static string GetRandomMessage(List<string> messagelist) => messagelist[GetRandom(0, messagelist.Count)];
         private static int GetRandom(int min, int max) => UnityEngine.Random.Range(min, max);
 
@@ -2669,21 +1870,21 @@ namespace Oxide.Plugins
         [ChatCommand("npc_add")]
         private void cmdChatNPCAdd(BasePlayer player, string command, string[] args)
         {
-            if(!hasAccess(player)) return;
-            if(player.GetComponent<NPCEditor>() != null)
+            if (!hasAccess(player)) return;
+            if (player.GetComponent<NPCEditor>() != null)
             {
                 SendReply(player, "NPC Editor: Already editing an NPC, say /npc_end first");
                 return;
             }
             Quaternion currentRot;
-            if(!TryGetPlayerView(player, out currentRot))
+            if (!TryGetPlayerView(player, out currentRot))
             {
                 SendReply(player, "Couldn't get player rotation");
                 return;
             }
 
             HumanPlayer humanPlayer;
-            if(args.Length > 0)
+            if (args.Length > 0)
             {
                 ulong targetId;
                 if (!ulong.TryParse(args[0], out targetId))
@@ -2700,10 +1901,8 @@ namespace Oxide.Plugins
                 humanPlayer = CreateNPC(player.transform.position, currentRot, "NPC", targetId);
             }
             else
-            {
                 humanPlayer = CreateNPC(player.transform.position, currentRot);
-            }
-            if(humanPlayer == null)
+            if (humanPlayer == null)
             {
                 SendReply(player, "Couldn't spawn the NPC");
                 return;
@@ -2878,8 +2077,7 @@ namespace Oxide.Plugins
                 SendReply(player, "<color=#81F781>/npc stopandtalk</color> <color=#F2F5A9>true</color>/<color=#F6CECE>false</color> XX <color=#F2F5A9>XX </color>=> <color=#D8D8D8>To choose if the NPC should stop & look at the player that is talking to him</color>");
                 SendReply(player, "<color=#81F781>/npc use</color> <color=#F6CECE>reset</color>/<color=#F2F5A9>\"TEXT\" \"TEXT2\" \"TEXT3\"</color> => <color=#D8D8D8>Dont forgot the \", this what will be said when the player presses USE on the NPC</color>");
                 SendReply(player, "<color=#81F781>/npc waypoints</color> <color=#F6CECE>reset</color>/<color=#F2F5A9>\"Waypoint list Name\" </color>=> <color=#D8D8D8>To set waypoints of an NPC, /npc_help for more information</color>");
-				SendReply(player, "<color=#81F781>/npc sound</color> <color=#F2F5A9>\" Sound file name\" </color>=> <color=#D8D8D8>To set sound file created with /npc_sound</color>");
-				return;
+                return;
             }
             var param = args[0].ToLower();
             if (args.Length == 1)
@@ -2912,9 +2110,6 @@ namespace Oxide.Plugins
                         break;
                     case "evdist":
                         message = $"This NPC evade distance is set to: {npcEditor.targetNPC.info.evade}";
-                        break;
-                    case "follow":
-                        message = $"This NPC follow is set to: {npcEditor.targetNPC.info.follow}";
                         break;
                     case "allowsit":
                         message = $"This NPC allowsit is set to: {npcEditor.targetNPC.info.allowsit}";
@@ -2952,15 +2147,6 @@ namespace Oxide.Plugins
                     case "speed":
                         message = $"This NPC Chasing speed is: {npcEditor.targetNPC.info.speed}";
                         break;
-                    case "playtune":
-                        message = $"This NPC will play tune: {npcEditor.targetNPC.info.playTune}";
-                        break;
-                    case "sound":
-                        if (string.IsNullOrEmpty(npcEditor.targetNPC.info.Sound))
-                            message = "No sound file set";
-                        else
-                            message = $"This NPC will play sound file: {npcEditor.targetNPC.info.Sound}";
-                        break;						
                     case "stopandtalk":
                         message = $"This NPC stop to talk is set to: {npcEditor.targetNPC.info.stopandtalk} for {npcEditor.targetNPC.info.stopandtalkSeconds} seconds";
                         break;
@@ -3013,11 +2199,11 @@ namespace Oxide.Plugins
                         npcEditor.targetNPC.info.allowsit = false;
                         npcEditor.targetNPC.locomotion.Stand();
                         break;
-                    case "sit":
-                        message = $"Sitting!";
-                        npcEditor.targetNPC.info.allowsit = true;
-                        npcEditor.targetNPC.locomotion.Sit();
-                        break;
+                //    case "sit":
+                //        message = $"Sitting!";
+                //        npcEditor.targetNPC.info.allowsit = true;
+                //        npcEditor.targetNPC.locomotion.Sit();
+                //        break;
                     case "info":
                         message = $" {npcEditor.targetNPC.info.displayName}\n"
                             + $"\tenabled: {npcEditor.targetNPC.info.enable}\n"
@@ -3027,7 +2213,6 @@ namespace Oxide.Plugins
                             + $"\tdefend: {npcEditor.targetNPC.info.defend}\n"
                             + $"\tevade: {npcEditor.targetNPC.info.evade}\n"
                             + $"\tevdist: {npcEditor.targetNPC.info.evdist}\n"
-                            + $"\tfollow: {npcEditor.targetNPC.info.follow}\n"
                             + $"\tallowsit: {npcEditor.targetNPC.info.allowsit}\n"
                             + $"\tsitting: {npcEditor.targetNPC.locomotion.sitting}\n"
                             + $"\tneedsAmmo: {npcEditor.targetNPC.info.needsAmmo}\n"
@@ -3040,10 +2225,8 @@ namespace Oxide.Plugins
                             + $"\tcollision radius: {npcEditor.targetNPC.info.collisionRadius}\n"
                             + $"\trespawn: {npcEditor.targetNPC.info.respawn} after {npcEditor.targetNPC.info.respawnSeconds} seconds\n"
                             + $"\tspawn:\n\t\t{npcEditor.targetNPC.info.spawnInfo.String()}\n"
-                            + $"\tposition:\n\t\t{npcEditor.targetNPC.player.transform.position.ToString()}\n"
                             + $"\tchasing speed: {npcEditor.targetNPC.info.speed}\n"
-							+ $"\tplaytune: {npcEditor.targetNPC.info.playTune}\n"
-							+ $"\tstop to talk: {npcEditor.targetNPC.info.stopandtalk} for {npcEditor.targetNPC.info.stopandtalkSeconds} seconds\n";
+                            + $"\tstop to talk: {npcEditor.targetNPC.info.stopandtalk} for {npcEditor.targetNPC.info.stopandtalkSeconds} seconds\n";
                         if(npcEditor.targetNPC.info.waypoint == null)
                         {
                             message += "\tNo waypoints";
@@ -3104,7 +2287,7 @@ namespace Oxide.Plugins
                         message += $"\treload duration: {npcEditor.targetNPC.info.reloadDuration}\n";
 
                         SendReply(player, $"NPC Info: {message}\n\n");
-                        return;
+                        break;
                     default:
                         message = "Wrong Argument.  /npc for more information.";
                         break;
@@ -3131,9 +2314,6 @@ namespace Oxide.Plugins
                 case "hostile":
                     npcEditor.targetNPC.info.hostile = GetBoolValue(args[1]);
                     break;
-				case "playtune":
-                    npcEditor.targetNPC.info.playTune = GetBoolValue(args[1]);
-                    break;	
                 case "defend":
                     npcEditor.targetNPC.info.defend = GetBoolValue(args[1]);
                     break;
@@ -3142,9 +2322,6 @@ namespace Oxide.Plugins
                     break;
                 case "evdist":
                     npcEditor.targetNPC.info.evdist = Convert.ToSingle(args[1]);
-                    break;
-                case "follow":
-                    npcEditor.targetNPC.info.follow = GetBoolValue(args[1]);
                     break;
                 case "allowsit":
                     npcEditor.targetNPC.info.allowsit = GetBoolValue(args[1]);
@@ -3229,15 +2406,6 @@ namespace Oxide.Plugins
                 case "hitchance":
                     npcEditor.targetNPC.info.hitchance = Convert.ToSingle(args[1]);
                     break;
-                case "sound":
-                    npcEditor.targetNPC.info.Sound = args[1];
-                    break;
-				case "soundonuse":
-                    npcEditor.targetNPC.info.SoundOnUse = GetBoolValue(args[1]);
-                    break;
-				case "soundonenter":
-                    npcEditor.targetNPC.info.SoundOnEnter = GetBoolValue(args[1]);
-                    break;						
                 case "reloadduration":
                     npcEditor.targetNPC.info.reloadDuration = Convert.ToSingle(args[1]);
                     break;
@@ -3267,7 +2435,6 @@ namespace Oxide.Plugins
             }
             UnityEngine.Object.Destroy(npcEditor);
             SendReply(player, "NPC Editor: Ended");
-            SaveData();
         }
 
         [ChatCommand("npc_pathtest")]
@@ -3287,42 +2454,6 @@ namespace Oxide.Plugins
             if (!TryGetClosestRayPoint(player.transform.position, currentRot, out closestEnt, out closestHitpoint)) return;
             Interface.Oxide.CallHook("FindAndFollowPath", npcEditor.targetNPC.player, npcEditor.targetNPC.player.transform.position, closestHitpoint);
         }
-
-//        [ChatCommand("npc_follow")]
-//        private void cmdChatNPCFollow(BasePlayer player, string command, string[] args)
-//        {
-//            if (!hasAccess(player)) return;
-//
-//            HumanPlayer humanPlayer;
-//            BaseEntity pe = player as BaseEntity;
-//            if (args.Length == 0)
-//            {
-//                Quaternion currentRot;
-//                if (!TryGetPlayerView(player, out currentRot)) return;
-//                object closestEnt;
-//                Vector3 closestHitpoint;
-//                if (!TryGetClosestRayPoint(player.transform.position, currentRot, out closestEnt, out closestHitpoint)) return;
-//                humanPlayer = ((Collider)closestEnt).GetComponentInParent<HumanPlayer>();
-//                if (humanPlayer == null)
-//                {
-//                    SendReply(player, "This is not an NPC");
-//                    return;
-//                }
-//            }
-//            else
-//            {
-//                SendReply(player, "You are not looking at an NPC or this userid doesn't exist");
-//                return;
-//            }
-//
-//            var targetid = humanPlayer.player.userID;
-//            humanPlayer.AllowMove();
-//            //humanPlayer.StartFollowingEntity(pe, player.displayName);
-//            humanPlayer.locomotion.targetPosition = player.transform.position;
-//            humanPlayer.locomotion.followEntity = player;
-//            humanPlayer.locomotion.TryToMove();
-//            SendReply(player, $"NPC {targetid} following");
-//        }
 
         [ChatCommand("npc_remove")]
         private void cmdChatNPCRemove(BasePlayer player, string command, string[] args)
@@ -3434,19 +2565,6 @@ namespace Oxide.Plugins
                 }
                 humanPlayer.StartAttackingEntity(player);
             }
-			
-			if (!string.IsNullOrEmpty(humanPlayer.info.Sound))
-			{
-				if (humanPlayer.info.SoundOnEnter)
-				{
-					if (NpcTalking.Contains(humanPlayer.player.userID)) return;
-					if (FileExists(humanPlayer.info.Sound))
-					{
-						NpcTalking.Add(humanPlayer.player.userID);
-						humanPlayer.QueueSound(LoadDataSound(humanPlayer.info.Sound));
-					}
-				}
-			}
         }
 
         //////////////////////////////////////////////////////

@@ -1,544 +1,346 @@
 ﻿using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Oxide.Core.Plugins;
-using UnityEngine;
-using Oxide.Game.Rust.Cui;
 using System.Linq;
 using System.Text;
-using System.Collections;
-using System.IO;
-using Oxide.Core;
-using UnityEngine.Networking;
 using System.Text.RegularExpressions;
-using Object = System.Object;
-using Physics = UnityEngine.Physics;
-using Pool = Facepunch.Pool;
-using Time = UnityEngine.Time;
+using Newtonsoft.Json;
+using Oxide.Core;
+using Oxide.Core.Plugins;
+using Oxide.Game.Rust.Cui;
+using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("IQGradeRemove", "Mercury", "2.34.45")]
-    [Description("IQGradeRemove")]
-    public class IQGradeRemove : RustPlugin
+    [Info("IQGradeRemove", "Mercury", "0.1.5")]
+    [Description("Умный Grade Remove")]
+    class IQGradeRemove : RustPlugin
     {
-        /// <summary>
-        /// TODO: RaidBlock + radialMenu в VK от Андрей Чичеренко
-        /// - Исправление после обновления игры
+        /// <summary> 
+        /// Обновление 0.1.3
+        /// - Изменен метод проверки на объекты при постройке
+        /// Обновление 0.1.4
+        /// - Поправлена проверка на ресурсы при улучшении всех объектов
+        /// - Исправлен интерфейс
+        /// - Добавлена проверка на null в хуке OnHammerHit
         /// </summary>
-        
-        #region Reference
+        /// Обновление 0.1.5
+        /// - Исправлено возврат лестницы/сетки при удалении
+        /// - Исправлено возврат стен и ворот при удалениие
+        /// - Исправлен возврат карьера при удалении
+        /// - Исправлена возможность забиндить команд на улучшение и удаление
+        /// - Исправлено удаление объектов на РТ
+        /// - Исправлен метод с запретом на удаление
+        /// - Исправлен метод с запретом на возврат предмета после удаления
+        /// - Добавлена возможность скрывать меню после истечения времени улучшения/удаления (Настраивается в конфигурации)
+        /// - Добавлена возможность заменить символ на кнопке закрыть
+        /// - Добавлена возможность скрыть кнопку закрыть
+        /// - Добавлена возможность скрыть уровни улучшения в интерфейсе
 
-        [PluginReference] Plugin IQTurret, Friends, Clans, IQRecycler, XBuildingSkinMenu, AutoBaseUpgrade, RaidBlock, NoEscape;
-        
-        #region RaidBlocked
-        
-        private Boolean IsRaidBlocked(BasePlayer player)
-        {
-            if (RaidBlock)
-                return RaidBlock.Call<Boolean>("IsRaidBlocked", player);
-            return NoEscape && NoEscape.Call<Boolean>("IsRaidBlocked", player);
-        }
-        
-        #endregion
-
-        #region Friends / Clans
-
-        private Boolean IsFriends(BasePlayer player, UInt64 targetPlayerID)
-        {
-            List<UInt64> FriendList = GetFriendList(player);
-            try
-            {
-                return FriendList != null && FriendList.Contains(targetPlayerID);
-            }
-            finally
-            {
-                Pool.FreeUnmanaged(ref FriendList);
-            }
-        }
-        
-        private List<UInt64> GetFriendList(BasePlayer targetPlayer)
-        {
-            List<UInt64> FriendList = Pool.Get<List<UInt64>>();
-            if (Friends)
-            {
-                if (Friends?.Call("GetFriends", targetPlayer.userID.Get()) is UInt64[] frinedList)
-                    FriendList.AddRange(frinedList);
-            }
-            
-            if (Clans)
-            {
-                if (Clans?.Call("GetClanMembers", targetPlayer.UserIDString) is UInt64[] ClanMembers)
-                    FriendList.AddRange(ClanMembers);
-            }
-
-            if(targetPlayer.Team != null)
-                FriendList.AddRange(targetPlayer.Team.members);
-
-            return FriendList;
-        }
-        
-        #endregion
-
-        #region XBuildingSkinMenu
-
-        private UInt64 GetBuildingSkin(BasePlayer player, BuildingGrade.Enum grade)
-        {
-            if (XBuildingSkinMenu == null) return 0;
-            if (XBuildingSkinMenu.Version < new Oxide.Core.VersionNumber(1, 1, 4))
-            {
-                PrintWarning(LanguageEn ? "You have an outdated version of the XBuildingSkinMenu plugin installed. For full functionality between IQGradeRemove and XBuildingSkinMenu, you need to update XBuildingSkinMenu to version 1.0.7 or higher!" : "У вас установлена устаревшая версия плагина XBuildingSkinMenu, для полноценного функционала между IQGradeRemove и XBuildingSkinMenu вам требуется обновить XBuildingSkinMenu до версии 1.0.7 или выше!");
-                return 0;
-            }
-            return XBuildingSkinMenu?.Call<UInt64>("GetBuildingSkin", player, grade) ?? 0;
-        }
-
-        #endregion
-        
-        #endregion
-        
         #region Vars
-        private const Boolean LanguageEn = true;
-        
-        private static IQGradeRemove _;
-        
-        private static ImageUI _imageUI;
-        private static InterfaceBuilder _interface;
-        private Timer timerSaveData;
-        private static Double CurrentTime() => Facepunch.Math.Epoch.Current;
-
-        private const String PermissionsRemoveAdmin = "iqgraderemove.removeadmin";
-        private const String PermissionsDistanceFunc = "iqgraderemove.distancefunc";
-        private const String PermissionsAllObjects = "iqgraderemove.allobjects";
-        private const String PermissionsAllObjectsRemove = "iqgraderemove.allobjectsremove";
-        private const String PermissionsUpWood = "iqgraderemove.upwood";
-        private const String PermissionsUpStone = "iqgraderemove.upstones";
-        private const String PermissionsUpMetal = "iqgraderemove.upmetal";
-        private const String PermissionsUpHqm = "iqgraderemove.uphmetal";
-        private const String PermissionsRemove = "iqgraderemove.removeuse";
-        private const String PermissionGRNoResource = "iqgraderemove.grusenorecource";
-        private const String PermissionAllObjectsBack = "iqgraderemove.allobjectsback";
-        
-        private readonly Dictionary<String, String> PrefabNameNormalized = new Dictionary<String, String>()
+        public static String PermissionGRMenu = "iqgraderemove.gruse";
+        public static String PermissionGRNoResource = "iqgraderemove.grusenorecource";
+        public readonly Dictionary<Int32, String> StatusLevels = new Dictionary<Int32, String>
         {
-            ["mining_quarry"] = "mining.quarry",
-            ["refinery_small"] = "small.oil.refinery",
-            ["water_catcher_large"] = "water.catcher.large",
-            ["water_catcher_small"] = "water.catcher.small",
-            ["small_stash_deployed"] = "stash.small",
-            ["stocking_small_deployed"] = "stocking.small",
-            ["stocking_large_deployed"] = "stocking.large",
-            ["landmine"] = "trap.landmine",
-            ["survivalfishtrap.deployed"] = "fishtrap.small",
-            ["survivalfishtrap.deployed"] = "fishtrap.small",
-            ["waterpurifier.deployed"] = "water.purifier",
-            ["electric.windmill.small"] = "generator.wind.scrap",
-            ["wall.external.high.wood"] = "wall.external.high",
-            ["barricade.cover.wood_double"] = "barricade.wood.cover",
+            [0] = "ОТКЛЮЧЕНО",
+            [1] = "ДЕРЕВА",
+            [2] = "КАМНЯ",
+            [3] = "МЕТАЛЛА",
+            [4] = "МВК",
+            [5] = "УДАЛЕНИЕ",
+            [6] = "УДАЛЕНИЕ ВСЕГО",
+            [7] = "УЛУЧШЕНИЕ ВСЕГО",
         };
-        
-        private List<BasePlayer> playerAlerUp = new();
-        private List<BasePlayer> playerAlerRemove = new();
-        private ListDictionary<UInt64, Single> lastCheckTime = new ();
+
+        public readonly Dictionary<Int32, String> StatusLevelsAllGrades = new Dictionary<Int32, String>
+        {
+            [0] = "В СОЛОМУ",
+            [1] = "В ДЕРЕВО",
+            [2] = "В КАМЕНЬ",
+            [3] = "В МЕТАЛЛ",
+            [4] = "В МВК",
+        };
+        public readonly Dictionary<Int32, String> SoundLevelsGrade = new Dictionary<Int32, String>
+        {
+            [0] = "ОТКЛЮЧЕНО",
+            [1] = "assets/bundled/prefabs/fx/build/frame_place.prefab",
+            [2] = "assets/bundled/prefabs/fx/build/promote_stone.prefab",
+            [3] = "assets/bundled/prefabs/fx/build/promote_metal.prefab",
+            [4] = "assets/bundled/prefabs/fx/build/promote_toptier.prefab",
+            [5] = "УДАЛЕНИЕ"
+        };
+        public static readonly Dictionary<Int32, String> PermissionsLevel = new Dictionary<Int32, String>
+        {
+            [0] = "",
+            [1] = "iqgraderemove.upwood",
+            [2] = "iqgraderemove.upstones",
+            [3] = "iqgraderemove.upmetal",
+            [4] = "iqgraderemove.uphmetal",
+            [5] = "iqgraderemove.removeuse",
+        };
+
+
+
+        #region Format Time
+        static Int32 CurrentTime() => Facepunch.Math.Epoch.Current;
+        public static String FormatTime(TimeSpan time)
+        {
+            String result = String.Empty;
+            if (time.Days != 0)
+                result += $"{Format(time.Days, "д", "д", "д")} ";
+
+            if (time.Hours != 0)
+                result += $"{Format(time.Hours, "ч", "ч", "ч")} ";
+
+            if (time.Minutes != 0)
+                result += $"{Format(time.Minutes, "м", "м", "м")} ";
+
+            if (time.Seconds != 0)
+                result += $"{Format(time.Seconds, "с", "с", "с")} ";
+
+            return result;
+        }
+        private static String Format(Int32 units, String form1, String form2, String form3)
+        {
+            var tmp = units % 10;
+
+            if (units >= 5 && units <= 20 || tmp >= 5 && tmp <= 9)
+                return $"{units} {form1}";
+
+            if (tmp >= 2 && tmp <= 4)
+                return $"{units} {form2}";
+
+            return $"{units} {form3}";
+        }
+        #endregion
 
         #endregion
-        
+
+        #region Reference
+        [PluginReference] Plugin Friends;
+        public Boolean IsRaidBlocked(BasePlayer player)
+        {
+            var ret = Interface.Call("CanTeleport", player) as String;
+            if (ret != null)
+                return true;
+            else return false;
+        }
+        public Boolean IsFriends(UInt64 userID, UInt64 targetID)
+        {
+            if (Friends)
+                return (Boolean)Friends?.Call("HasFriend", userID, targetID);
+            else return false;
+        }
+
+        void RegisteredPermissions()
+        {
+            var RemoveTimed = config.RemoveSetting.TimedSetting;
+
+            foreach (var PermsBlockTimed in RemoveTimed.ItemsTimesAllPermissions)
+                if (!permission.PermissionExists(PermsBlockTimed.Key, this))
+                    permission.RegisterPermission(PermsBlockTimed.Key, this);
+
+            foreach (var PermsBlockTimed in RemoveTimed.ItemsTimesPermissions)
+                if (!permission.PermissionExists(PermsBlockTimed.Key, this))
+                    permission.RegisterPermission(PermsBlockTimed.Key, this);
+
+            if (!permission.PermissionExists(PermissionGRMenu, this))
+                permission.RegisterPermission(PermissionGRMenu, this);
+
+            if (!permission.PermissionExists(PermissionGRNoResource, this))
+                permission.RegisterPermission(PermissionGRNoResource, this);
+
+            foreach (string Permissions in PermissionsLevel.Values)
+                if (!permission.PermissionExists(Permissions, this))
+                    permission.RegisterPermission(Permissions, this);
+        }
+
+        #endregion
+
         #region Configuration
 
         private static Configuration config = new Configuration();
-
         private class Configuration
         {
-            [JsonProperty(LanguageEn ? "Disable the connection of the plugin with the radial RUST menu (true - yes/false - no)" : "Отключить связь плагина с радиальным меню RUST (true - да/false - нет)")]
-            public Boolean disableControllRadialMenu;
-            [JsonProperty(LanguageEn ? "Use notifications with instructions when using a chat command to delete or improve" : "Использовать уведомления с инструкцией при использовании чат команды на удаление или улучшение")]
-            public Boolean useInstructionAlert;
-            [JsonProperty(LanguageEn ? "Upgrade settings" : "Настройка улучшения")]
-            public UpgradePreset UpgradePresets = new UpgradePreset();
+            [JsonProperty("Настройка удаления объектов")]
+            public RemoveSettings RemoveSetting = new RemoveSettings();
+            [JsonProperty("Настройка улучшения объектов")]
+            public GradeSettings GradeSetting = new GradeSettings();
+            [JsonProperty("Настройка интерфейса")]
+            public InterfaceSettings InterfaceSetting = new InterfaceSettings();
+            [JsonProperty("Использовать пермишенсы для включения определенного UP или ремува(смотрите в описании плагина, там указаны права)")]
+            public bool UsePermission;
 
-            [JsonProperty(LanguageEn ? "Remove settings" : "Настройка удаления")]
-            public RemovePreset RemovePresets = new RemovePreset();
-
-            [JsonProperty(LanguageEn ? "Allow remote upgrade/remove (just hit with a mallet next to the object) (grant rights)" : "Разрешить дистанционное улучшение/удаление (достаточно просто рядом с объектом ударить киянкой) (выдайте права)")]
-            public Boolean UseDistanceFunc;
-            
-            [JsonProperty(LanguageEn ? "Setting Commands for functions" : "Настройка команд для функций")]
-            public CommandPresets CommandsList = new CommandPresets();
-
-            [JsonProperty(LanguageEn ? "Remove the UI when the player has passed all stages of improvement - or will be looped (there will be no looping if the player does not have rights to a particular element with the support of rights to elements enabled)" : "Удалять интерфейс когда игрок пройдет все этапы улучшения - либо будет зациклено (зацикливание не будет если у игрока нет прав на тот или иной элемент при включенной поддержке прав на элементы)")]
-            public Boolean ConfigResetInterface;
-            [JsonProperty(LanguageEn ? "Enable support for rights for each element separately (rights are issued separately for each variation)" : "Включить поддержку прав на каждый элемент отдельно (права выдаются отдельно под каждую вариацию)")]
-            public Boolean IsCheckPermission;
-            [JsonProperty(LanguageEn ? "Duration of the selected element (improvement/removal) in seconds" : "Время действия выбранного элемента (улучшени/удаления) в секундах")]
-            public Int32 ConfigActiveGradeRemove;
-
-            [JsonProperty(LanguageEn ? "Setting UI" : "Настройка UI")]
-            public InterfaceController InterfaceControllers = new InterfaceController();
-            
-            internal class InterfaceController
+            #region Remove Configuration
+            internal class RemoveSettings
             {
-                [JsonProperty(LanguageEn ? "Setting up the main panel UI" : "Настройка UI главной панели")]
-                public Coordinates StaticPanel = new Coordinates();
-                [JsonProperty(LanguageEn ? "Setting the 'All' element" : "Настройка элемента 'All'")]
-                public AllObjects AllObject = new AllObjects();
-                [JsonProperty(LanguageEn ? "Setting up controls" : "Настройка элементов управления")]
-                public TypeElements TypeElement = new TypeElements();
-                [JsonProperty(LanguageEn ? "Setting up timers" : "Настройка таймера")]
-                public TimerElement TimerElements = new TimerElement();
-
-                [JsonProperty(LanguageEn ? "Enable the `Close UI` button (Don't forget to add its image)" : "Включить кнопку `Закрытия UI` (Не забудьте добавить ее изображение)")]
-                public Boolean closeUIUsed;
-                
-                internal class AllObjects
-                {
-                    [JsonProperty(LanguageEn ? "Setting up the 'All' button" : "Настройка кнопки 'All'")]
-                    public Coordinates AllObjectsButton = new Coordinates();
-                    [JsonProperty(LanguageEn ? "Buttonn stroke size" : "Размер обводки кнопки")]
-                    public String SizeSelectedElement; 
-                }
-
-                internal class TimerElement
-                {
-                    [JsonProperty(LanguageEn ? "Setting the timer position" : "Настройка расположения таймера")]
-                    public Coordinates TimerPosition = new Coordinates();
-                    [JsonProperty(LanguageEn ? "Timer text size" : "Размер текста таймера")]
-                    public Int32 SizeTimer;
-                }
-                
-                internal class TypeElements
-                {
-                    [JsonProperty(LanguageEn ? "Customize the user interface of the active type (wood/stone, etc.)" : "Настройка UI активных типов (дерево/камень и т.д)")]
-                    public Coordinates TypesElements = new Coordinates();
-                    [JsonProperty(LanguageEn ? "Spacing between elements" : "Отступы между элементами")]
-                    public Single OffsetBetweenElements;
-                    [JsonProperty(LanguageEn ? "Element stroke size" : "Размер обводки выбранного элемента")]
-                    public String SizeSelectedElement; 
-                }
-                
-                internal class Coordinates
-                {
-                    public String AnchorMin;
-                    public String AnchorMax;
-                    public String OffsetMin;
-                    public String OffsetMax;
-                }
-            }
-            
-            internal class CommandPresets
-            {
-                [JsonProperty(LanguageEn ? "List of commands to upgrade" : "Список команд для улучшения")]
-                public List<String> UpgradeCommands = new List<String>();
-
-                [JsonProperty(LanguageEn ? "List of commands to remove" : "Список команд для удаления")]
-                public List<String> RemoveCommands = new List<String>();
-            }
-
-            internal class UpgradePreset
-            {
-                [JsonProperty(LanguageEn
-                    ? "Allow upgrade remove after recent damage"
-                    : "Разрешить улучшение постройки после недавно нанесенного урона")]
-                public Boolean UpgradeSecondsAttacks;
-                
-                [JsonProperty(LanguageEn
-                    ? "Require the structure to be repaired before upgrading it if it does not have full durability"
-                    : "Требовать починить строение перед его улучшением, если у строения не полное количество прочности")]
-                public Boolean RepairToGrade;
-                
-                [JsonProperty(LanguageEn
-                    ? "Require authorization in the cupboard before improving the building"
-                        : "Требовать авторизацию в шкафу перед улучшением постройки")]
-                public Boolean NoGradeWithoutCupboard;
-                
-                [JsonProperty(LanguageEn
-                    ? "Disable upgrade during raid block"
-                    : "Запретить улучшение во время рейдблока")]
-                public Boolean NoGradeRaidBlock;
-
-                [JsonProperty(LanguageEn
-                    ? "Allow rolling back upgrade-level (Example : stone to wood)"
-                    : "Разрешить откатывать улучшение назад (Например : камень в дерево)")]
-                public Boolean BackUpgrade;
-                
-                [JsonProperty(LanguageEn
-                    ? "Return resources when rolling back an upgrade (if metal - into wood - N% of metal resources will be returned)"
-                    : "Возвращать ресурсы при откате улучшения назад (если металл - в дерево - будет возвращен N% ресурсов металла)")]
-                public Boolean BackUpgradeReturnedItem;
-
-                [JsonProperty(LanguageEn
-                    ? "Indicate the percentage of resource return when rolling back the upgrade"
-                    : "Укажите % возврата ресурсов при откате улучшения")]
-                public Int32 BackUpgradeReturnedItemPercent;
-                
-                [JsonProperty(LanguageEn
-                    ? "Cooldown settings before upgrade a new object"
-                    : "Настройка перезарядки перед улучшением нового объекта")]
-                public CooldownController CooldownUpgrade = new CooldownController();
-            }
-
-            internal class RemovePreset
-            {
-                [JsonProperty(LanguageEn
-                    ? "Allow building remove after recent damage"
-                    : "Разрешить удаление постройки после недавно нанесенного урона")]
-                public Boolean RemoveSecondsAttacks;
-                
-                [JsonProperty(LanguageEn
-                    ? "Disable remove during raid block"
-                    : "Запретить удаление во время рейдблока")]
-                public Boolean NoRemoveRaidBlock;
-
-                [JsonProperty(LanguageEn
-                    ? "Only friends can remove structures (otherwise, anyone who has access to the cupboard)"
-                    : "Удалять постройки могут только друзья (Иначе все,кто есть в шкафу)")]
-                public Boolean RemoveOnlyFriends;
-
-                [JsonProperty(LanguageEn
-                    ? "Items that cannot be removed (Shortname)"
-                    : "Предметы, которые нельзя удалить (Shortname)")]
-                public List<String> NoRemoveItems = new List<String>();
-
-                [JsonProperty(LanguageEn
-                    ? "Cooldown settings before removing a new object"
-                    : "Настройка перезарядки перед удалением нового объекта")]
-                public CooldownController CooldownRemove = new CooldownController();
-
-                [JsonProperty(LanguageEn
-                    ? "Temporary construction removal restriction (Exapmle : After placing the object, it won't be possible to remove it for a certain amount of time)"
-                    : "Временный запрет на удаление постройки (Например : После установки объекта, его N количество времени нельзя будет удалить)")]
-                public BlockRemoveBuilding TemporaryBlockBuildRemove = new BlockRemoveBuilding();
-
-                [JsonProperty(LanguageEn
-                    ? "Complete prohibition of object removal (For example: After 3 hours of placing the object, it cannot be removed at all)"
-                    : "Полный запрет на удаление объекта (Например : Через 3 часа после установки объекта, его нельзя будет удалить вообще)")]
-                public BlockRemoveBuilding FullBlockBuildRemove = new BlockRemoveBuilding();
-
-                [JsonProperty(LanguageEn
-                    ? "Resource and item return settings after deletion"
-                    : "Настройка возврата ресурсов и предметов после удаления")]
-                public ReturnedSettings ReturnedRemoveSettings = new ReturnedSettings();
-
-                internal class BlockRemoveBuilding
-                {
-                    [JsonProperty(LanguageEn ? "Use lock function" : "Использовать функцию блокировки")]
-                    public Boolean UseBlock;
-
-                    [JsonProperty(LanguageEn ? "Time in seconds" : "Время в секундах")]
-                    public Int32 TimeRemove;
-
-                    [JsonProperty(LanguageEn
-                        ? "Privilege-based configuration [iqgraderemove.name = time (in seconds)]"
-                        : "Настройка по привилегиям [iqgraderemove.name = время (в секундах)]")]
-                    public Dictionary<String, Int32> PermissionTime = new Dictionary<String, Int32>();
-                }
+                [JsonProperty("Настройка возврата предметов после удаления")]
+                public ReturnedSettings ReturnedSetting = new ReturnedSettings();
+                [JsonProperty("Настройка удаления через время")]
+                public TimedSettings TimedSetting = new TimedSettings();
+                [JsonProperty("Настройка запретов")]
+                public SettingsBlocks SettingsBlock = new SettingsBlocks();
+                [JsonProperty("Время действия удаления")]
+                public int RemoveTime;
 
                 internal class ReturnedSettings
                 {
-                    [JsonProperty(LanguageEn ? "Return attached items to the item being removed (For example, a combination lock to the door) (Return of items or % of resources on deletion must be enabled)" : "Возвращать прикрепленные предметы к удаляемому предмету (Например кодовый замок к двери) (Должен быть включен возврат предметов или % ресурсов при удалении)")]
-                    public Boolean returnedChildItems;
-                    [JsonProperty(LanguageEn ? "Resource return settings for building deletion" : "Настройка возврата ресурсов за удаление строений")]
-                    public Building BuildingSettings = new Building();
-
-                    [JsonProperty(LanguageEn ? "Resource/item return settings for item deletion" : "Настройка возврата ресурсов/предметов за удаление предметов")]
-                    public Items ItemsSettings = new Items();
-
-                    internal class Building
-                    {
-                        [JsonProperty(LanguageEn
-                            ? "Enable resource return for building deletion"
-                            : "Возвращать ресурсы за удаление строений")]
-                        public Boolean UseReturned;
-
-                        [JsonProperty(LanguageEn
-                            ? "Use return percentage based on building durability (disregards 'Resource return percentage for building deletion')"
-                            : "Использовать процент возврата в зависимости от количество прочности строения (не будет учитываться пункт 'Процент возврата ресурсов за удаление строений')")]
-                        public Boolean UsePercentHealts;
-
-                        [JsonProperty(LanguageEn
-                            ? "Resource return percentage for building deletion (regardless of building durability)"
-                            : "Процент возврата ресурсов за удаление строений (вне зависимости от количества прочности строения)")]
-                        public Int32 PercentReturn;
-                    }
-
-                    internal class Items
-                    {
-                        [JsonProperty(LanguageEn
-                            ? "Return items after deletion, otherwise return % of item's resources (if craftable)"
-                            : "Возвращать предметы после удаления, иначе будет возвращаться % ресурсов от предмета (если его возможно крафтить)")]
-                        public Boolean UseReturnedItem;
-
-                        [JsonProperty(LanguageEn
-                            ? "Use return percentage based on item durability (disregards 'Resource return percentage for item deletion')"
-                            : "Использовать процент возврата в зависимости от количество прочности строения (не будет учитываться пункт 'Процент возврата ресурсов за удаление предмета')")]
-                        public Boolean UsePercentHealts;
-
-                        [JsonProperty(LanguageEn
-                            ? "Resource return percentage for item deletion (if percentage return is enabled)"
-                            : "Процент возврата ресурсов за удаление предмета (если включен возврат процента)")]
-                        public Int32 PercentReturn;
-
-                        [JsonProperty(LanguageEn
-                            ? "Reduce item condition upon return"
-                            : "Снижать состояние предмета при возврате")]
-                        public Boolean UseDamageReturned;
-
-                        [JsonProperty(LanguageEn
-                            ? "Items to be ignored after deletion - they will simply be deleted without any return of items or resources (Shortname)"
-                            : "Предметы, которые игнорируются после удаления - они просто удалятся без возврата предмета или ресурсов (Shortname)")]
-                        public List<String> ShortnameNoteReturned = new List<String>();
-                    }
+                    [JsonProperty("Возвращать ресурсы за удаление строений?(true- да/false - нет)")]
+                    public bool UseReturnedResource;
+                    [JsonProperty("Процент возврата ресурсов за удаление строений?(true- да/false - нет)")]
+                    public int PercentReturnRecource;
+                    [JsonProperty("Возвращать все предметы при удалении?(true- да/false - нет)")]
+                    public bool UseAllowedReturned;
+                    [JsonProperty("Снижать состояние предмета при возврате?Эффект будто он поднял его через RUST систему")]
+                    public bool UseDamageReturned;
+                    [JsonProperty("Предметы,которые не возвращаются при удалении(Shortname)")]
+                    public List<string> ShortnameNoteReturned = new List<string>();
+                }
+                internal class TimedSettings
+                {
+                    [JsonProperty("Включить полный запрет на удаление объекта через N время(Пример : Через 3 часа после постройки,его нельзя будет удалить вообще)")]
+                    public bool UseAllBlock;
+                    [JsonProperty("Через сколько нельзя будет удалять постройку вообще")]
+                    public int TimeAllBlock;
+                    [JsonProperty("Кастомный список предметов,которые нельзя будет удалить через время по правам. [[IQGradeRemove.NAME]] - Время(в сек)")]
+                    public Dictionary<string, int> ItemsTimesAllPermissions = new Dictionary<string, int>();
+                    [JsonProperty("Использовать запрет на удаление постройки на время(После постройки объекта,его N количество времени нельзя будет удалить)")]
+                    public bool UseTimesBlock;
+                    [JsonProperty("Через сколько можно будет удалять постройку(если включено)")]
+                    public int TimesBlock;
+                    [JsonProperty("Кастомный список предметов,которые можно будет удалить через время по правам. [[IQGradeRemove.NAME]] - Время(в сек)")]
+                    public Dictionary<string, int> ItemsTimesPermissions = new Dictionary<string, int>();
+                }
+                internal class SettingsBlocks
+                {
+                    [JsonProperty("[NoEscape] Запретить удаление во время рейдблока(true - да/false - нет)")]
+                    public bool NoEscape;
+                    [JsonProperty("[Friends] Удалять постройки могут только друзья(Иначе все,кто есть в шкафу)(true - да/false - нет)")]
+                    public bool Friends;
+                    [JsonProperty("Предметы,которые нельзя удалить(Shortname)")]
+                    public List<string> ShortnameNoteReturned = new List<string>();
                 }
             }
+            #endregion
 
-            internal class CooldownController
+            #region Grade Configuration
+            internal class GradeSettings
             {
-                [JsonProperty(LanguageEn ? "Use cooldown before action" : "Использовать перезарядку перед действием")]
-                public Boolean UseCooldown;
-
-                [JsonProperty(LanguageEn ? "Time in seconds" : "Время в секундах")]
-                public Single SecondCooldown;
+                [JsonProperty("Время действия улучшения")]
+                public int GradeTime;
+                [JsonProperty("Разрешить обратное улучшение?(Пример : МВК стенку откатить в деревянную)(true - да/false - нет)")]
+                public bool UseBackUp;
+                [JsonProperty("Настройка запретов")]
+                public SettingsBlocks SettingsBlock = new SettingsBlocks();
+                internal class SettingsBlocks
+                {
+                    [JsonProperty("[NoEscape] Запретить улучшение во время рейдблока(true - да/false - нет)")]
+                    public bool NoEscape;
+                }
             }
+            #endregion 
+
+            #region Interface
+            internal class InterfaceSettings
+            {
+                [JsonProperty("Настройка интерфейса")]
+                public MainInterface MainInterfaces = new MainInterface();
+
+                internal class MainInterface
+                {
+                    [JsonProperty("Скрывать интерфейс по истечению таймера")]
+                    public Boolean HideMenuTimer;
+                    [JsonProperty("Отображать уровни улучшений в интерфейсе")]
+                    public Boolean ShowLevelUp;
+                    [JsonProperty("Отображать кнопку закрыть в меню")]
+                    public Boolean ShowCloseButton;
+                    [JsonProperty("Символ для кнопки закрыть")]
+                    public String SymbolCloseButton;
+                    [JsonProperty("Цвет панели(HEX)")]
+                    public string ColorPanel;
+                    [JsonProperty("Цвет текста(HEX)")]
+                    public string ColorText;
+                }
+            }
+            #endregion
 
             public static Configuration GetNewConfiguration()
             {
                 return new Configuration
                 {
-                    disableControllRadialMenu = false,
-                    useInstructionAlert = false, 
-                    UseDistanceFunc = false,
-                    ConfigResetInterface = true,
-                    ConfigActiveGradeRemove = 60,
-                    IsCheckPermission = false,
-                    InterfaceControllers = new InterfaceController()
+                    UsePermission = false,
+
+                    #region Remove Configuration
+                    RemoveSetting = new RemoveSettings
                     {
-                        StaticPanel = new InterfaceController.Coordinates()
+                        RemoveTime = 30,
+                        ReturnedSetting = new RemoveSettings.ReturnedSettings
                         {
-                            AnchorMin = "0 0",
-                            AnchorMax = "0 0",
-                            OffsetMin = "58.333 25",
-                            OffsetMax = "335.667 73"
-                        },
-                        TypeElement = new InterfaceController.TypeElements() 
-                        {
-                            OffsetBetweenElements = -44.5f,
-                            SizeSelectedElement = "21.333",
-                            TypesElements = new InterfaceController.Coordinates()
+                            UseReturnedResource = true,
+                            PercentReturnRecource = 50,
+                            UseDamageReturned = true,
+                            UseAllowedReturned = true,
+                            ShortnameNoteReturned = new List<string>
                             {
-                                AnchorMin = "0.5 0.5", 
-                                AnchorMax = "0.5 0.5",
-                                OffsetMin = "-132 -17.333",
-                                OffsetMax = "-97 17.333",
+                                "campfire",
                             }
                         },
-                        AllObject = new InterfaceController.AllObjects
+                        TimedSetting = new RemoveSettings.TimedSettings
                         {
-                            AllObjectsButton = new InterfaceController.Coordinates
+                            UseAllBlock = false,
+                            TimeAllBlock = 60,
+                            ItemsTimesAllPermissions = new Dictionary<string, int>
                             {
-                                AnchorMin = "0.5 0.5",
-                                AnchorMax = "0.5 0.5",
-                                OffsetMin = "-188.46712 -24",
-                                OffsetMax = "-140.467 24"
+                                ["iqgraderemove.vip"] = 200,
+                                ["iqgraderemove.prem"] = 250,
+                                ["iqgraderemove.gold"] = 300,
                             },
-                            SizeSelectedElement = "21.333", 
+                            UseTimesBlock = false,
+                            TimesBlock = 100,
+                            ItemsTimesPermissions = new Dictionary<string, int>
+                            {
+                                ["iqgraderemove.vip"] = 150,
+                                ["iqgraderemove.prem"] = 200,
+                                ["iqgraderemove.gold"] = 300,
+                            },
                         },
-                        TimerElements = new InterfaceController.TimerElement()
+                        SettingsBlock = new RemoveSettings.SettingsBlocks
                         {
-                            TimerPosition = new InterfaceController.Coordinates()
+                            Friends = true,
+                            NoEscape = true,
+                            ShortnameNoteReturned = new List<string>
                             {
-                                AnchorMin = "0.5 0.5",
-                                AnchorMax = "0.5 0.5",
-                                OffsetMin = "90.878 -18.828",
-                                OffsetMax = "137.255 18.828",
-                            },
-                            SizeTimer = 30,
+                                "campfire",
+                            }
                         }
                     },
-                    CommandsList = new CommandPresets()
+                    #endregion
+
+                    #region Grade Configuration
+                    GradeSetting = new GradeSettings
                     {
-                        UpgradeCommands = new List<String>()
+                        GradeTime = 30,
+                        UseBackUp = false,
+                        SettingsBlock = new GradeSettings.SettingsBlocks
                         {
-                            "up",
-                            "upgrade",
-                            "grade",
-                            "bgrade"
-                        },
-                        RemoveCommands = new List<String>()
-                        {
-                            "remove",
-                            "rem",
+                            NoEscape = true,
                         }
                     },
-                    UpgradePresets = new UpgradePreset()
+                    #endregion
+
+                    #region Interface
+                    InterfaceSetting = new InterfaceSettings
                     {
-                        NoGradeWithoutCupboard = false,
-                        UpgradeSecondsAttacks = false,
-                        RepairToGrade = true,
-                        NoGradeRaidBlock = true,
-                        BackUpgrade = false,
-                        BackUpgradeReturnedItem = false,
-                        BackUpgradeReturnedItemPercent = 50,
-                        CooldownUpgrade = new CooldownController()
+                        MainInterfaces = new InterfaceSettings.MainInterface
                         {
-                            UseCooldown = false,
-                            SecondCooldown = 30,
-                        }
+                            ColorPanel = "#525252",
+                            ColorText = "#C9C0B9FF",
+                            SymbolCloseButton = "<",
+                            ShowCloseButton = true,
+                            ShowLevelUp = true,
+                            HideMenuTimer = true,
+                        },
                     },
-                    RemovePresets = new RemovePreset()
-                    {
-                        RemoveSecondsAttacks = false,
-                        NoRemoveRaidBlock = true,
-                        RemoveOnlyFriends = false,
-                        NoRemoveItems = new List<String>()
-                        {
-                            "shortname.example"
-                        },
-                        CooldownRemove = new CooldownController()
-                        {
-                            UseCooldown = false,
-                            SecondCooldown = 30,
-                        },
-                        TemporaryBlockBuildRemove = new RemovePreset.BlockRemoveBuilding()
-                        {
-                            UseBlock = false,
-                            TimeRemove = 600,
-                            PermissionTime = new Dictionary<String, Int32>()
-                            {
-                                ["iqgraderemove.elite"] = 100,
-                                ["iqgraderemove.vip"] = 300,
-                            }
-                        },
-                        FullBlockBuildRemove = new RemovePreset.BlockRemoveBuilding()
-                        {
-                            UseBlock = false,
-                            TimeRemove = 600,
-                            PermissionTime = new Dictionary<String, Int32>()
-                            {
-                                ["iqgraderemove.elite"] = 1500,
-                                ["iqgraderemove.vip"] = 1000,
-                            }
-                        },
-                        ReturnedRemoveSettings = new RemovePreset.ReturnedSettings()
-                        {
-                            returnedChildItems = false,
-                            ItemsSettings = new RemovePreset.ReturnedSettings.Items
-                            {
-                                UseReturnedItem = true,
-                                UsePercentHealts = true,
-                                PercentReturn = 100,
-                                UseDamageReturned = true,
-                                ShortnameNoteReturned = new List<String>()
-                                {
-                                    "shortname.example",
-                                }
-                            },
-                            BuildingSettings = new RemovePreset.ReturnedSettings.Building()
-                            {
-                                UseReturned = true,
-                                UsePercentHealts = true,
-                                PercentReturn = 100,
-                            }
-                        }
-                    }
+                    #endregion
                 };
             }
         }
@@ -550,123 +352,12 @@ namespace Oxide.Plugins
             {
                 config = Config.ReadObject<Configuration>();
                 if (config == null) LoadDefaultConfig();
-
-                if (config.InterfaceControllers == null)
-                {
-                    if (config.InterfaceControllers.StaticPanel == null)
-                    {
-                        config.InterfaceControllers = new Configuration.InterfaceController()
-                        {
-                            StaticPanel = new Configuration.InterfaceController.Coordinates()
-                            {
-                                AnchorMin = "0 0",
-                                AnchorMax = "0 0",
-                                OffsetMin = "58.333 25",
-                                OffsetMax = "335.667 73"
-                            }
-                        };
-                    }
-
-                    if (config.InterfaceControllers.AllObject == null)
-                    {
-                        config.InterfaceControllers.AllObject = new Configuration.InterfaceController.AllObjects()
-                        {
-                            AllObjectsButton = new Configuration.InterfaceController.Coordinates()
-                            {
-                                AnchorMin = "0.5 0.5",
-                                AnchorMax = "0.5 0.5",
-                                OffsetMin = "-188.46712 -24",
-                                OffsetMax = "-140.467 24"
-                            },
-                            SizeSelectedElement = "21.333"
-                        };
-                    }
-
-                    if (config.InterfaceControllers.TypeElement == null)
-                    {
-                        config.InterfaceControllers.TypeElement = new Configuration.InterfaceController.TypeElements()
-                        {
-                            SizeSelectedElement = "21.333",
-                            OffsetBetweenElements = -44.5f,
-                            TypesElements = new Configuration.InterfaceController.Coordinates()
-                            {
-                                AnchorMin = "0.5 0.5",
-                                AnchorMax = "0.5 0.5",
-                                OffsetMin = "-132 -17.333",
-                                OffsetMax = "-97 17.333",
-                            }
-                        };
-                    }
-
-                    if (config.InterfaceControllers.TimerElements == null)
-                    {
-                        config.InterfaceControllers.TimerElements = new Configuration.InterfaceController.TimerElement()
-                        {
-                            TimerPosition = new Configuration.InterfaceController.Coordinates()
-                            {
-                                AnchorMin = "0.5 0.5",
-                                AnchorMax = "0.5 0.5",
-                                OffsetMin = "90.878 -18.828",
-                                OffsetMax = "137.255 18.828",
-                            },
-                            SizeTimer = 30,
-                        };
-                    }
-                }
-
-                if (config.InterfaceControllers.StaticPanel.AnchorMin == null)
-                    config.InterfaceControllers.StaticPanel.AnchorMin = "0 0";
-                if (config.InterfaceControllers.StaticPanel.AnchorMax == null)
-                    config.InterfaceControllers.StaticPanel.AnchorMax = "0 0";
-                if (config.InterfaceControllers.StaticPanel.OffsetMin == null)
-                    config.InterfaceControllers.StaticPanel.OffsetMin = "58.333 25";
-                if (config.InterfaceControllers.StaticPanel.OffsetMax == null)
-                    config.InterfaceControllers.StaticPanel.OffsetMax = "335.667 73";
-                
-                if (config.InterfaceControllers.AllObject.AllObjectsButton.AnchorMin == null)
-                    config.InterfaceControllers.AllObject.AllObjectsButton.AnchorMin = "0.5 0.5";
-                if (config.InterfaceControllers.AllObject.AllObjectsButton.AnchorMax == null)
-                    config.InterfaceControllers.AllObject.AllObjectsButton.AnchorMax = "0.5 0.5";
-                if (config.InterfaceControllers.AllObject.AllObjectsButton.OffsetMin == null)
-                    config.InterfaceControllers.AllObject.AllObjectsButton.OffsetMin = "-188.46712 -24";
-                if (config.InterfaceControllers.AllObject.AllObjectsButton.OffsetMax == null)
-                    config.InterfaceControllers.AllObject.AllObjectsButton.OffsetMax = "-140.467 24";
-                if (config.InterfaceControllers.AllObject.SizeSelectedElement == null)
-                    config.InterfaceControllers.AllObject.SizeSelectedElement = "21.333";
-                
-                
-                if (config.InterfaceControllers.TypeElement.TypesElements.AnchorMin == null)
-                    config.InterfaceControllers.TypeElement.TypesElements.AnchorMin = "0.5 0.5";
-                if (config.InterfaceControllers.TypeElement.TypesElements.AnchorMax == null)
-                    config.InterfaceControllers.TypeElement.TypesElements.AnchorMax = "0.5 0.5";
-                if (config.InterfaceControllers.TypeElement.TypesElements.OffsetMin == null)
-                    config.InterfaceControllers.TypeElement.TypesElements.OffsetMin = "-132 -17.333";
-                if (config.InterfaceControllers.TypeElement.TypesElements.OffsetMax == null)
-                    config.InterfaceControllers.TypeElement.TypesElements.OffsetMax = "-97 17.333";
-                if (config.InterfaceControllers.TypeElement.OffsetBetweenElements == 0)
-                    config.InterfaceControllers.TypeElement.OffsetBetweenElements = -44.5f;
-                if (config.InterfaceControllers.TypeElement.SizeSelectedElement == null)
-                    config.InterfaceControllers.TypeElement.SizeSelectedElement = "21.333";
-                
-                if (config.InterfaceControllers.TimerElements.TimerPosition.AnchorMin == null)
-                    config.InterfaceControllers.TimerElements.TimerPosition.AnchorMin = "0.5 0.5";
-                if (config.InterfaceControllers.TimerElements.TimerPosition.AnchorMax == null)
-                    config.InterfaceControllers.TimerElements.TimerPosition.AnchorMax = "0.5 0.5";
-                if (config.InterfaceControllers.TimerElements.TimerPosition.OffsetMin == null)
-                    config.InterfaceControllers.TimerElements.TimerPosition.OffsetMin = "90.878 -18.828";
-                if (config.InterfaceControllers.TimerElements.TimerPosition.OffsetMax == null)
-                    config.InterfaceControllers.TimerElements.TimerPosition.OffsetMax = "137.255 18.828";
-                if (config.InterfaceControllers.TimerElements.SizeTimer == 0)
-                    config.InterfaceControllers.TimerElements.SizeTimer = 30;
             }
             catch
             {
-                PrintWarning(LanguageEn
-                    ? $"Error reading #54327 configuration 'oxide/config/{Name}', creating a new configuration!!"
-                    : $"Ошибка чтения #54327 конфигурации 'oxide/config/{Name}', создаём новую конфигурацию!!");
+                PrintWarning("Ошибка #132" + $"чтения конфигурации 'oxide/config/{Name}', создаём новую конфигурацию!!");
                 LoadDefaultConfig();
             }
-
             NextTick(SaveConfig);
         }
 
@@ -674,1883 +365,1024 @@ namespace Oxide.Plugins
         protected override void SaveConfig() => Config.WriteObject(config);
 
         #endregion
-        
+
         #region Data
-
-        private enum TypeBlock
-        {
-            Temporary,
-            Full,
+        public Dictionary<ulong, GradeRemove> DataPlayer = new Dictionary<ulong, GradeRemove>();
+        public Dictionary<uint, int> BuildingRemoveTimers = new Dictionary<uint, int>();
+        public Dictionary<uint, int> BuildingRemoveBlock = new Dictionary<uint, int>();
+        void ReadData() {
+            BuildingRemoveTimers = Oxide.Core.Interface.Oxide.DataFileSystem.ReadObject<Dictionary<uint, int>>("IQGradeRemove/BlockBuilding");
+            BuildingRemoveBlock = Oxide.Core.Interface.Oxide.DataFileSystem.ReadObject<Dictionary<uint, int>>("IQGradeRemove/BuildingRemoveBlock");
         }
-        
-        private Dictionary<UInt64, Double> TemporaryBlockBuild = new Dictionary<UInt64, Double>();
-        private Dictionary<UInt64, Double> FullBlockBuild = new Dictionary<UInt64, Double>();
-
-        private Double GetTimeBlockBuild(TypeBlock typeBlock, UInt64 buildNetID)
-        {
-            Configuration.RemovePreset.BlockRemoveBuilding ConfigureBlock = typeBlock == TypeBlock.Temporary ? config.RemovePresets.TemporaryBlockBuildRemove : config.RemovePresets.FullBlockBuildRemove;
-            if (!ConfigureBlock.UseBlock) return 0;
-            
-            Dictionary<UInt64, Double> BlockList = typeBlock == TypeBlock.Temporary ? TemporaryBlockBuild : FullBlockBuild;
-            return BlockList.TryGetValue(buildNetID, out Double timeBlock) ? timeBlock - CurrentTime() : 0;
+        void WriteData() {
+            Oxide.Core.Interface.Oxide.DataFileSystem.WriteObject("IQGradeRemove/BlockBuilding", BuildingRemoveTimers);
+            Oxide.Core.Interface.Oxide.DataFileSystem.WriteObject("IQGradeRemove/BuildingRemoveBlock", BuildingRemoveBlock);
         }
-
-        private void RemoveBlockBuild(String userID, TypeBlock typeBlock, UInt64 buildNetID)
+        ///0 - солома
+        ///1 - дерево
+        ///2 - камень
+        ///3 - металл
+        ///4 - мвк
+        public class GradeRemove
         {
-            Configuration.RemovePreset.BlockRemoveBuilding ConfigureBlock = typeBlock == TypeBlock.Temporary ? config.RemovePresets.TemporaryBlockBuildRemove : config.RemovePresets.FullBlockBuildRemove;
-            if (!ConfigureBlock.UseBlock) return;
-            
-            Dictionary<UInt64, Double> BlockList = typeBlock == TypeBlock.Temporary ? TemporaryBlockBuild : FullBlockBuild;
-            if (!BlockList.ContainsKey(buildNetID)) return;
-            BlockList.Remove(buildNetID);
-        }
-        
-        private void SetupBlockBuild(String userID, TypeBlock typeBlock, UInt64 buildNetID)
-        {
-            Configuration.RemovePreset.BlockRemoveBuilding ConfigureBlock = typeBlock == TypeBlock.Temporary ? config.RemovePresets.TemporaryBlockBuildRemove : config.RemovePresets.FullBlockBuildRemove;
-            if (!ConfigureBlock.UseBlock) return;
-            
-            Dictionary<UInt64, Double> BlockList = typeBlock == TypeBlock.Temporary ? TemporaryBlockBuild : FullBlockBuild;
-            if (!BlockList.ContainsKey(buildNetID))
-                BlockList[buildNetID] = GetTimeBlock(userID, typeBlock);
-        }
-
-        private Double GetTimeBlock(String userID, TypeBlock typeBlock)
-        {
-            Configuration.RemovePreset.BlockRemoveBuilding ConfigureBlock = typeBlock == TypeBlock.Temporary ? config.RemovePresets.TemporaryBlockBuildRemove : config.RemovePresets.FullBlockBuildRemove;
-            if (!ConfigureBlock.UseBlock) return 0;
-            
-            Int32 TimeBlock = ConfigureBlock.TimeRemove;
-            
-            foreach (KeyValuePair<String, Int32> permissionTimeBlock in ConfigureBlock.PermissionTime.OrderBy(x => x.Value))
+            public int ActiveTime;
+            public int GradeLevel;
+            public Boolean GradeAllObject;
+            public Timer TimerEvent = null;
+            public void GradeUP(BasePlayer player, bool UseMyGrade = false, int CustomGrade = 0)
             {
-                if (permission.UserHasPermission(userID, permissionTimeBlock.Key))
-                    TimeBlock = permissionTimeBlock.Value;
-            }
-
-            return TimeBlock + CurrentTime();
-        }
-        
-        void ReadData()
-        {
-            if (config.RemovePresets.TemporaryBlockBuildRemove.UseBlock)
-                TemporaryBlockBuild = Oxide.Core.Interface.Oxide.DataFileSystem.ReadObject<Dictionary<UInt64, Double>>("IQSystem/IQGradeRemove/TemporaryBlockBuilding");
-            
-            if (config.RemovePresets.FullBlockBuildRemove.UseBlock)
-                FullBlockBuild = Oxide.Core.Interface.Oxide.DataFileSystem.ReadObject<Dictionary<UInt64, Double>>("IQSystem/IQGradeRemove/FullBlockBuilding");
-        }
-        void WriteData(Boolean skipCheck = false) 
-        {
-            if (config.RemovePresets.TemporaryBlockBuildRemove.UseBlock || skipCheck)
-                Oxide.Core.Interface.Oxide.DataFileSystem.WriteObject("IQSystem/IQGradeRemove/TemporaryBlockBuilding", TemporaryBlockBuild);
-
-            if (config.RemovePresets.FullBlockBuildRemove.UseBlock || skipCheck)
-                Oxide.Core.Interface.Oxide.DataFileSystem.WriteObject("IQSystem/IQGradeRemove/FullBlockBuilding", FullBlockBuild);
-        }
-        
-        #region LocalRepository
-        
-        private enum ActionType
-        {
-            None,
-            Wood,
-            Stone,
-            Metal,
-            Hqm,
-            Remove,
-            RemoveAdmin
-        }
-        
-        private class LocalRepositoryUser
-        {
-            private Boolean isReset;
-            public Int32 activityTime = 0;
-            private Boolean isAllObject = false; 
-            private Timer timerInfo;
-
-            public ActionType selectedType = ActionType.None;
-
-            #region Cooldown 
-            
-            private Double CooldownUpgrade;
-            private Double CooldownRemove;
-
-            private Boolean UseCooldown()
-            {
-                return selectedType switch
-                {
-                    ActionType.None => false,
-                    ActionType.Remove => config.RemovePresets.CooldownRemove.UseCooldown,
-                    _ => config.UpgradePresets.CooldownUpgrade.UseCooldown
-                };
-            }
-
-            public void SetupCooldownData()
-            {
-                switch (selectedType)
-                {
-                    case ActionType.None:
-                        return;
-                    case ActionType.Remove:
-                        CooldownRemove = CurrentTime() + config.RemovePresets.CooldownRemove.SecondCooldown;
-                        break;
-                    case ActionType.Wood:
-                    case ActionType.Stone:
-                    case ActionType.Metal:
-                    case ActionType.Hqm:
-                    default:
-                        CooldownUpgrade = CurrentTime() + config.UpgradePresets.CooldownUpgrade.SecondCooldown;
-                        break;
-                }
-            }
-
-            public Boolean IsCooldown()
-            {
-                if (!UseCooldown()) return false;
-
-                Double remainingCooldown = (selectedType == ActionType.Remove) 
-                    ? CooldownRemove - CurrentTime()
-                    : CooldownUpgrade - CurrentTime();
-
-                return remainingCooldown > 0;
-            }
-
-            public Double GetCooldownTime()
-            {
-                if (!UseCooldown()) return 0;
-
-                if (!IsCooldown())
-                {
-                    SetupCooldownData();
-                    return 0;
-                }
-
-                if (selectedType == ActionType.Remove)
-                    return CooldownRemove - CurrentTime();
-    
-                return CooldownUpgrade - CurrentTime();
-            }
-
-             
-             #endregion
-            
-            #region All Objects
-            
-            public Boolean HasAllObjectsPermission(BasePlayer player) => _.permission.UserHasPermission(player.UserIDString, PermissionsAllObjects);
-            public Boolean IsAllObjects(BasePlayer player) => HasAllObjectsPermission(player) && isAllObject && selectedType != ActionType.None;
-
-            public void TurnedAllObjects(BasePlayer player)
-            {
-                isAllObject = !isAllObject;
-                _.DrawUI_Button_AllObject(player, IsAllObjects(player));
-            }
-
-            #endregion
-            
-            public Int32 GetGradeLevel => selectedType is ActionType.Remove or ActionType.None ? -1 : (Int32)selectedType;
-      
-            public void ActionAssignment(BasePlayer player, Int32 customType = -1)
-            {
-                Int32 correctedCustomType = customType is > 5 or < 1 ? 1 : customType;
-                Int32 nextTypeAsInt = (customType != -1) ? correctedCustomType : (Int32)selectedType + 1;
-    
-                if (customType != -1)
-                {
-                    if (!isReset && (Int32)selectedType == nextTypeAsInt)
+                if (config.UsePermission)
+                    foreach (var Perm in PermissionsLevel.Where(p => inst.permission.UserHasPermission(player.UserIDString, p.Value)))
                     {
-                        isReset = true;
-                        DeleteTimerUI(player);
-                        return;
-                    }
-                    
-                    isReset = false;
-                }
-
-                if (config.IsCheckPermission)
-                {
-                    Boolean anyPermissionFound = false;
-                    Boolean sameTypeFound = false;
-                    Boolean onlyOneTypeAvailable = true;  
-
-                    while (nextTypeAsInt <= (Int32)ActionType.Remove)
-                    {
-                        if (HasPermissionTypes(player, nextTypeAsInt))
+                        if (!UseMyGrade)
                         {
-                            anyPermissionFound = true;
-                            if (nextTypeAsInt != (Int32)selectedType)
-                                onlyOneTypeAvailable = false;  
-                            else sameTypeFound = true;
-                            break;
+                            if (GradeLevel == 5) GradeLevel = 0;
+                            if (GradeLevel >= Perm.Key) continue;
+                            GradeLevel = Perm.Key;
                         }
-                        nextTypeAsInt++;
-                    }
-                    
-                    if (onlyOneTypeAvailable)  
-                    {
-                        if (sameTypeFound && timerInfo is { Destroyed: false })
+                        else if (String.IsNullOrWhiteSpace(PermissionsLevel[CustomGrade]) || inst.permission.UserHasPermission(player.UserIDString, PermissionsLevel[CustomGrade]))
                         {
-                            isReset = true;
-                            DeleteTimerUI(player);
+                            GradeLevel = CustomGrade;
                             return;
                         }
-                        
-                        if (!anyPermissionFound && (timerInfo == null || timerInfo.Destroyed))
-                        {
-                            _.MessageGameTipsError(player, _.GetLang("NO_PERMISSION", player.UserIDString));
-                            return;
-                        }
-                        
-                        DeleteTimerUI(player);
-                        return;
+                        else inst.Interface_Error(player, inst.GetLang("NO_PERM_GRADE_REMOVE", player.UserIDString));
+                        break;
                     }
+                else
+                {
+                    if (!UseMyGrade)
+                    {
+                        if (GradeLevel > 4)
+                            GradeLevel = 0;
+                        else GradeLevel++;
+                    }
+                    else GradeLevel = CustomGrade;
                 }
 
-                if (nextTypeAsInt > (Int32)ActionType.Remove)
+                RebootTimer();
+                int TimeActive = CustomGrade != 0 & CustomGrade != 5 ? config.GradeSetting.GradeTime : config.RemoveSetting.RemoveTime;
+                ActiveTime = Convert.ToInt32(TimeActive + CurrentTime());
+            }
+            public void RebootTimer()
+            {
+                if (TimerEvent != null)
+                    TimerEvent.Destroy();
+            }
+        }
+        void RegisteredUser(BasePlayer player)
+        {
+            if (!DataPlayer.ContainsKey(player.userID))
+                DataPlayer.Add(player.userID, new GradeRemove { ActiveTime = 0, GradeLevel = 0 });
+
+            if (player.HasFlag(BaseEntity.Flags.Reserved10))
+                player.SetFlag(BaseEntity.Flags.Reserved10, false);
+        }
+        #endregion
+
+        #region Grade Core
+        public String GradeErrorParse(BasePlayer player, BuildingBlock buildingBlock, BuildingGrade.Enum grade = BuildingGrade.Enum.None)
+        {
+            var Data = DataPlayer[player.userID];
+            var Block = config.GradeSetting.SettingsBlock;
+
+            if (DeployVolume.Check(buildingBlock.transform.position, buildingBlock.transform.rotation, PrefabAttribute.server.FindAll<DeployVolume>(buildingBlock.prefabID), ~(5 << buildingBlock.gameObject.layer)))
+                return GetLang("GRADE_NO_THIS_USER", player.UserIDString);
+
+            if (Block.NoEscape && IsRaidBlocked(player))
+                return GetLang("GRADE_NO_ESCAPE", player.UserIDString);
+
+            if (buildingBlock.SecondsSinceAttacked < 30)
+                return GetLang("GRADE_ATTACKED_BLOCK", player.UserIDString, FormatTime(TimeSpan.FromSeconds(30 - (int)buildingBlock.SecondsSinceAttacked)));
+
+            if (!player.CanBuild())
+                return GetLang("GRADE_NO_AUTH", player.UserIDString);
+
+            if (!permission.UserHasPermission(player.UserIDString, PermissionGRNoResource))
+            {
+                Int32 Grade = grade == BuildingGrade.Enum.None ? Data.GradeLevel : (Int32)grade;
+                if (!buildingBlock.CanAffordUpgrade((BuildingGrade.Enum)Grade, player))
+                    return GetLang("GRADE_NO_RESOURCE", player.UserIDString);
+            }
+
+            return "";
+        }
+
+        public void GradeBuilding(BasePlayer player, BuildingBlock buildingBlock)
+        {
+            var Data = DataPlayer[player.userID];
+            String AlertGrrade = GradeErrorParse(player, buildingBlock);
+            if (!String.IsNullOrWhiteSpace(AlertGrrade))
+            {
+                Interface_Error(player, AlertGrrade);
+                return;
+            }
+            if (!config.GradeSetting.UseBackUp)
+                if (buildingBlock.grade > (BuildingGrade.Enum)Data.GradeLevel) return;
+
+            if (!permission.UserHasPermission(player.UserIDString, PermissionGRNoResource))
+                buildingBlock.PayForUpgrade(buildingBlock.GetGrade((BuildingGrade.Enum)Data.GradeLevel), player);
+
+            buildingBlock.SetGrade((BuildingGrade.Enum)Data.GradeLevel);
+            buildingBlock.SetHealthToMax();
+            buildingBlock.UpdateSkin();
+
+            Effect.server.Run(SoundLevelsGrade[Data.GradeLevel], player.GetNetworkPosition());
+            DataPlayer[player.userID].ActiveTime = (Int32)(config.GradeSetting.GradeTime + CurrentTime());
+        }
+
+
+        public void GradeAll(BasePlayer player, BuildingBlock buildingBlock)
+        {
+            if (buildingBlock.GetBuildingPrivilege() == null)
+            {
+                Interface_Error(player, GetLang("GRADE_ALL_NO_AUTH",player.UserIDString));
+                return;
+            }
+            if (!player.IsBuildingAuthed())
+            {
+                Interface_Error(player, GetLang("GRADE_NO_AUTH", player.UserIDString));
+                return;
+            }
+
+            foreach (var Block in buildingBlock.GetBuildingPrivilege().GetBuilding().buildingBlocks.Where(x => x.grade != (BuildingGrade.Enum)DataPlayer[player.userID].GradeLevel))
+            {
+                if (!permission.UserHasPermission(player.UserIDString, PermissionGRNoResource))
                 {
-                    if (isReset || !config.ConfigResetInterface)
+                    if (!Block.CanAffordUpgrade(((BuildingGrade.Enum)DataPlayer[player.userID].GradeLevel), player))
                     {
-                        nextTypeAsInt = (Int32)ActionType.Wood;
-                        isReset = false;
+                        Interface_Error(player, GetLang("GRADE_NO_RESOURCE", player.UserIDString));
+                        return;
                     }
                     else
                     {
-                        isReset = true;
-                        DeleteTimerUI(player);
-                        return;
+                        Block.PayForUpgrade(buildingBlock.GetGrade((BuildingGrade.Enum)DataPlayer[player.userID].GradeLevel), player);
+                        Block.SetGrade((BuildingGrade.Enum)DataPlayer[player.userID].GradeLevel);
+                        Block.SetHealthToMax();
+                        Block.UpdateSkin();
                     }
                 }
-
-                selectedType = (ActionType)nextTypeAsInt;
-                _.DrawUI_StaticPanel(player);
-                ResetTimer(player);
-            }
-
-            public Boolean HasPermissionTypes(BasePlayer player, Int32 actionType)
-            {
-                if (!config.IsCheckPermission) return true;
-                return actionType switch
+                else
                 {
-                    (Int32)ActionType.Wood => _.permission.UserHasPermission(player.UserIDString, PermissionsUpWood),
-                    (Int32)ActionType.Stone => _.permission.UserHasPermission(player.UserIDString, PermissionsUpStone),
-                    (Int32)ActionType.Metal => _.permission.UserHasPermission(player.UserIDString, PermissionsUpMetal),
-                    (Int32)ActionType.Hqm => _.permission.UserHasPermission(player.UserIDString, PermissionsUpHqm),
-                    (Int32)ActionType.Remove => _.permission.UserHasPermission(player.UserIDString, PermissionsRemove),
-                    _ => false
-                };
-            }
-
-            public void ResetTimer(BasePlayer player)
-            {
-                timerInfo?.Destroy();
-                activityTime = (Int32)CurrentTime() + config.ConfigActiveGradeRemove;
-                _.DrawUI_Timer(player, (Int32)(activityTime - CurrentTime()));
-                timerInfo = _.timer.Repeat(1f, config.ConfigActiveGradeRemove, () =>
-                {
-                    TimerController(player);
-                });
-            }
-
-            private void TimerController(BasePlayer player)
-            {
-                if (CurrentTime() >= activityTime)
-                    DeleteTimerUI(player);
-                else _.DrawUI_Timer_Update(player, (Int32)(activityTime - CurrentTime()));
-            }
-
-            public void DeleteTimerUI(BasePlayer player)
-            {
-                CuiHelper.DestroyUi(player, InterfaceBuilder.UI_GREADE_REMOVE_OVERLAY);
-            
-                timerInfo?.Destroy();
-
-                selectedType = ActionType.None;
-            }
-        }
-
-        private Dictionary<BasePlayer, LocalRepositoryUser> LocalRepository = new Dictionary<BasePlayer, LocalRepositoryUser>();
-
-        #endregion
-
-        private void RegisteredPlayer(BasePlayer player) => LocalRepository.TryAdd(player, new LocalRepositoryUser());
-
-        #endregion
-
-        #region Metods
-
-        private void ControllerGradeRemove(BasePlayer player, String ArgNumber = "")
-        {
-            if (String.IsNullOrWhiteSpace(ArgNumber))
-            {
-                LocalRepository[player].ActionAssignment(player);
-                return;
-            }
-
-            if (!Int32.TryParse(ArgNumber, out Int32 actionType))
-                return;
-            
-            LocalRepository[player].ActionAssignment(player, actionType);
-        }
-
-        private void RegisteredPermissions()
-        {
-            if (!permission.PermissionExists(PermissionsAllObjects, this))
-                permission.RegisterPermission(PermissionsAllObjects, this);
-            
-            if (!permission.PermissionExists(PermissionGRNoResource, this))
-                permission.RegisterPermission(PermissionGRNoResource, this);
-            
-            if (!permission.PermissionExists(PermissionAllObjectsBack, this))
-                permission.RegisterPermission(PermissionAllObjectsBack, this);
-            
-            if (!permission.PermissionExists(PermissionsUpWood, this))
-                permission.RegisterPermission(PermissionsUpWood, this);
-            
-            if (!permission.PermissionExists(PermissionsUpStone, this))
-                permission.RegisterPermission(PermissionsUpStone, this);
-            
-            if (!permission.PermissionExists(PermissionsUpMetal, this))
-                permission.RegisterPermission(PermissionsUpMetal, this);
-            
-            if (!permission.PermissionExists(PermissionsUpHqm, this))
-                permission.RegisterPermission(PermissionsUpHqm, this);
-            
-            if (!permission.PermissionExists(PermissionsRemove, this))
-                permission.RegisterPermission(PermissionsRemove, this);
-            
-            if (!permission.PermissionExists(PermissionsDistanceFunc, this))
-                permission.RegisterPermission(PermissionsDistanceFunc, this);   
-            
-            if (!permission.PermissionExists(PermissionsRemoveAdmin, this))
-                permission.RegisterPermission(PermissionsRemoveAdmin, this); 
-            
-            if (!permission.PermissionExists(PermissionsAllObjectsRemove, this))
-                permission.RegisterPermission(PermissionsAllObjectsRemove, this);
-
-            foreach (KeyValuePair<String,Int32> fullBlockSettigns in config.RemovePresets.FullBlockBuildRemove.PermissionTime)
-            {
-                if (!permission.PermissionExists(fullBlockSettigns.Key, this))
-                    permission.RegisterPermission(fullBlockSettigns.Key, this);
-            }
-            
-            foreach (KeyValuePair<String,Int32> temporaryBlockSettigns in config.RemovePresets.TemporaryBlockBuildRemove.PermissionTime)
-            {
-                if (!permission.PermissionExists(temporaryBlockSettigns.Key, this))
-                    permission.RegisterPermission(temporaryBlockSettigns.Key, this);
-            }
-        }
-
-        #region Upgrade Core
-   
-        private void UpgradeHit(BasePlayer player, BaseEntity entity, LocalRepositoryUser repositoryUser)
-        {
-            BuildingBlock buildingBlock = entity as BuildingBlock;
-            if (buildingBlock == null) return;
-            
-            String canUpgradeResult = CanUpgrade(player, buildingBlock, repositoryUser);
-            if (!String.IsNullOrWhiteSpace(canUpgradeResult))
-            {
-                MessageGameTipsError(player, canUpgradeResult);
-                return;
-            }
-            
-            Int32 GradeLevel = repositoryUser.GetGradeLevel;
-            if (GradeLevel == -1) return;
-
-            BuildingGrade.Enum selectedGrade = (BuildingGrade.Enum)GradeLevel;
-            
-            if (selectedGrade == buildingBlock.grade) return;
-
-            // Unsubscribe(nameof(OnStructureUpgrade));
-            //
-            // // if (Interface.Call("OnStructureUpgrade", buildingBlock, player, (BuildingGrade.Enum) selectedGrade) != null) 
-            // //     return;
-            // //
-            // Subscribe(nameof(OnStructureUpgrade));
-            
-            if (!config.UpgradePresets.BackUpgrade)
-            {
-                if (GradeLevel <= (Int32)buildingBlock.grade)
-                    return;
-            }
-            else if (config.UpgradePresets.BackUpgradeReturnedItem)
-            {
-                if (GradeLevel <= (Int32)buildingBlock.grade)
-                {
-                    foreach (ItemAmount itemAmount in buildingBlock.BuildCost())
-                    {
-                        Int32 amountItem = (Int32)(itemAmount.amount * (config.UpgradePresets.BackUpgradeReturnedItemPercent / 100.0f));
-                        if(amountItem <= 0) continue;
-
-                        Item backItem = ItemManager.CreateByName(itemAmount.itemDef.shortname, amountItem);
-                        if (backItem == null) continue;
-                        player.GiveItem(backItem);
-                    }
+                    Block.SetGrade((BuildingGrade.Enum)DataPlayer[player.userID].GradeLevel);
+                    Block.SetHealthToMax();
+                    Block.UpdateSkin();
                 }
             }
-
-            UInt64 SkinBuilding = GetBuildingSkin(player, selectedGrade);
-            
-            if (!permission.UserHasPermission(player.UserIDString, PermissionGRNoResource))
-                buildingBlock.PayForUpgrade(buildingBlock.blockDefinition.GetGrade(selectedGrade, SkinBuilding), player);
-
-            buildingBlock.SetHealthToMax();
-            
-            buildingBlock.ClientRPC<Int32, UInt64>((Network.Connection) null, "DoUpgradeEffect", GradeLevel, 0);
-            
-            buildingBlock.ChangeGradeAndSkin(selectedGrade, SkinBuilding, true, true);
-            
-            
-            if(buildingBlock.grade == BuildingGrade.Enum.Metal && SkinBuilding != 0 && SkinBuilding == 10221)
-            {
-                UInt32 lastBlockColourID = GetShippingContainerBlockColourForPlayer(player);
-                buildingBlock.SetCustomColour(lastBlockColourID == 0 ? buildingBlock.currentSkin.GetStartingDetailColour(0) : lastBlockColourID);
-            }
-            
-            repositoryUser.ResetTimer(player);
         }
-        
-        #region GetSetContainerColor
-    
-        private UInt32 GetShippingContainerBlockColourForPlayer(BasePlayer player)
-        {
-            Int32 infoInt = player.GetInfoInt("client.SelectedShippingContainerBlockColour", 0);
-      
-            if (infoInt >= 0)
-                return (UInt32)infoInt;
-      
-            return (UInt32)0;
-        }
-    
-        private void SetShippingContainerBlockColourForPlayer(BasePlayer player, uint color) => player.SetInfo("client.SelectedShippingContainerBlockColour", color.ToString());
-    
-        #endregion
-
-        private String CanUpgrade(BasePlayer player, BuildingBlock buildingBlock, LocalRepositoryUser repositoryUser, BuildingGrade.Enum grade = BuildingGrade.Enum.None)
-        {
-            if (buildingBlock.name.Contains("foundation") && DeployVolume.Check(buildingBlock.transform.position, buildingBlock.transform.rotation, PrefabAttribute.server.FindAll<DeployVolume>(buildingBlock.prefabID), ~(1 << buildingBlock.gameObject.layer)))
-                return GetLang("UPGRADE_FOREIGN_OBJECT", player.UserIDString);
-            
-            if (!config.UpgradePresets.UpgradeSecondsAttacks && buildingBlock.SecondsSinceAttacked < 30)
-                return GetLang("UPGRADE_SINCE_ATTACKED_BLOCK", player.UserIDString, FormatTime(TimeSpan.FromSeconds(30 - (Int32)buildingBlock.SecondsSinceAttacked), player.UserIDString));
-                
-            if(config.UpgradePresets.NoGradeWithoutCupboard)
-                if (player.GetBuildingPrivilege() == null || !player.IsBuildingAuthed())
-                    return GetLang("UPGRADE_NO_AUTH_BUILDING_CUPBOARD", player.UserIDString);
-            
-            if (!player.CanBuild())
-                return GetLang("UPGRADE_NO_AUTH_BUILDING", player.UserIDString);
-
-            Double CooldownTime = repositoryUser.GetCooldownTime();
-            if (CooldownTime > 0)
-                return GetLang("UPGRADE_TIME_EXECURE", player.UserIDString, FormatTime(TimeSpan.FromSeconds(CooldownTime), player.UserIDString));
-            
-            if (config.UpgradePresets.NoGradeRaidBlock && IsRaidBlocked(player))
-                return GetLang("UPGRADE_NO_ESCAPE", player.UserIDString);
-
-            if (config.UpgradePresets.RepairToGrade && buildingBlock.health < buildingBlock.MaxHealth() && buildingBlock.grade != BuildingGrade.Enum.Twigs)
-                return GetLang("UPGRADE_REPAIR_OBJECTS", player.UserIDString);
-            
-            if (permission.UserHasPermission(player.UserIDString, PermissionGRNoResource)) return String.Empty;
-            
-            Int32 gradeLevel = grade == BuildingGrade.Enum.None ? repositoryUser.GetGradeLevel : (Int32)grade;
-            return !buildingBlock.CanAffordUpgrade((BuildingGrade.Enum)gradeLevel, 0, player) ? GetLang("UPGRADE_NOT_ENOUGHT_RESOURCE", player.UserIDString) : String.Empty;
-        }
-        
         #endregion
 
         #region Remove Core
 
-        private void RemoveHit(BasePlayer player, BaseEntity entity, LocalRepositoryUser repositoryUser)
+        #region Permanent Block
+        private void AddRemoveBlockBuild(UInt32 netID, UInt64 userID)
         {
-            String canRemoveResult = CanRemove(player, entity);
-            if (!String.IsNullOrWhiteSpace(canRemoveResult))
+            var RemoveTime = config.RemoveSetting.TimedSetting;
+            if (!RemoveTime.UseAllBlock) return;
+            if (IsBlockAvailablePermanent(netID)) return;
+            Int32 Time = GetTimeBlockPermanent(userID);
+            BuildingRemoveBlock.Add(netID, Time);
+        }
+        private Boolean IsBlockAvailablePermanent(UInt32 netID)
+        {
+            if (BuildingRemoveBlock.ContainsKey(netID))
+                return true;
+            else return false;
+        }
+        private Boolean IsBlockBuildPemanent(UInt32 netID)
+        {
+            if (IsBlockAvailablePermanent(netID))
+                if (BuildingRemoveBlock[netID] <= CurrentTime())
+                    return true;
+                else return false;
+            else return false;
+        }
+        private Int32 GetTimeBlockPermanent(UInt64 userID)
+        {
+            var RemoveTime = config.RemoveSetting.TimedSetting;
+            Int32 Time = Convert.ToInt32(CurrentTime() + RemoveTime.TimeAllBlock);
+
+            foreach (var Perms in RemoveTime.ItemsTimesAllPermissions)
+                if (permission.UserHasPermission(userID.ToString(), Perms.Key))
+                {
+                    Time = Convert.ToInt32(CurrentTime() + Perms.Value);
+                    return Time;
+                }
+
+            return Time;
+        }
+        #endregion
+
+        #region Temporally Block
+        private void AddBlockBuild(UInt32 netID, UInt64 userID)
+        {
+            var RemoveTime = config.RemoveSetting.TimedSetting;
+            if (!RemoveTime.UseTimesBlock) return;
+            if (IsBlockAvailable(netID)) return;
+            Int32 Time = GetTimeBlock(userID);
+
+            BuildingRemoveTimers.Add(netID, Time);
+        }
+        private Boolean IsBlockAvailable(UInt32 netID)
+        {
+            if (BuildingRemoveTimers.ContainsKey(netID))
+                return true;
+            else return false;
+        }
+        private Boolean IsBlockBuild(UInt32 netID)
+        {
+            if (IsBlockAvailable(netID))
+                if (BuildingRemoveTimers[netID] > CurrentTime())
+                    return true;
+                else return false;
+            else return false;
+        }
+        private Int32 GetTimeBlock(UInt64 userID = 0)
+        {
+            var RemoveTime = config.RemoveSetting.TimedSetting;
+            Int32 Time = Convert.ToInt32(CurrentTime() + RemoveTime.TimesBlock);
+            if (!userID.IsSteamId()) return Time;
+
+            foreach (var Perms in RemoveTime.ItemsTimesPermissions)
+                if (permission.UserHasPermission(userID.ToString(), Perms.Key))
+                {
+                    Time = Convert.ToInt32(CurrentTime() + Perms.Value);
+                    return Time;
+                }
+
+            return Time;
+        }
+        private Int32 GetTimerBlock(UInt32 netID)
+        {
+            Int32 Time = 0;
+            if (IsBlockAvailable(netID))
+                Time = Convert.ToInt32(BuildingRemoveTimers[netID] - CurrentTime());
+            return Time;
+        }
+        #endregion
+
+        void ReturnedRemoveItems(BasePlayer player, BaseEntity buildingBlock)
+        {
+            var Remove = config.RemoveSetting.ReturnedSetting;
+            if(Remove.ShortnameNoteReturned.Contains(Regex.Replace(buildingBlock.ShortPrefabName.Replace("mining_quarry", "mining.quarry"), "\\.deployed|_deployed", ""))) return;
+
+            if (Remove.UseAllowedReturned)
             {
-                MessageGameTipsError(player, canRemoveResult);
+                Item ItemReturned = buildingBlock is BaseOven || buildingBlock is MiningQuarry || buildingBlock is BaseLadder || buildingBlock.GetComponent<BaseCombatEntity>().pickup.itemTarget == null ?
+                                    ItemManager.CreateByName(Regex.Replace(buildingBlock.ShortPrefabName.Replace("mining_quarry", "mining.quarry"), "\\.deployed|_deployed", ""), 1) : ItemManager.Create(buildingBlock.GetComponent<BaseCombatEntity>().pickup.itemTarget, 1);
+
+                if (ItemReturned != null)
+                {
+                    if (Remove.UseDamageReturned)
+                    {
+                        Single healthFraction = buildingBlock.GetComponent<BaseCombatEntity>().Health() / buildingBlock.GetComponent<BaseCombatEntity>().MaxHealth();
+                        ItemReturned.conditionNormalized = Mathf.Clamp01(healthFraction - buildingBlock.GetComponent<BaseCombatEntity>().pickup.subtractCondition);
+                    }
+                    player.GiveItem(ItemReturned);
+                    return;
+                }
+            }
+            if (Remove.UseReturnedResource)
+                if (buildingBlock is StabilityEntity)
+                {
+                    Single PercentResource = (Single)((Single)(Remove.PercentReturnRecource) / (Single)(100));
+                    foreach (var CostReturned in (buildingBlock as StabilityEntity).BuildCost())
+                        player.GiveItem(ItemManager.Create(CostReturned.itemDef, Mathf.FloorToInt((Single)CostReturned.amount * PercentResource)));
+                    return;
+                }
+        }
+
+        public void RemoveAll(BasePlayer player, BaseEntity buildingBlock)
+        {
+            if (buildingBlock.GetBuildingPrivilege() == null)
+            {
+                Interface_Error(player, GetLang("REMOVE_ALL_NO_AUTH", player.UserIDString));
+                return;
+            }
+            ListHashSet<BuildingBlock> BlocksRemoveAll = new ListHashSet<BuildingBlock>();
+            foreach (var Block in buildingBlock.GetBuildingPrivilege().GetBuilding().buildingBlocks)
+                if (!BlocksRemoveAll.Contains(Block))
+                     BlocksRemoveAll.Add(Block);
+
+
+            NextTick(() =>
+            {
+                foreach (var Block in BlocksRemoveAll)
+                    Block.Kill();
+            });
+        }
+
+        public string RemoveErrorParseBuilding(BasePlayer player, BaseEntity buildingBlock)
+        {
+            var Remove = config.RemoveSetting;
+            var Block = Remove.SettingsBlock;
+            var RemoveTimed = Remove.TimedSetting;
+
+            if(buildingBlock.OwnerID == 0)
+                return GetLang("REMOVE_ONLY_FRIENDS", player.UserIDString);
+
+            if (Block.NoEscape && IsRaidBlocked(player))
+                return GetLang("REMOVE_NO_ESCAPE", player.UserIDString);
+
+            BuildingBlock buildingBlocks = buildingBlock.GetComponent<BuildingBlock>();
+            if (buildingBlocks != null)
+            {
+                if (buildingBlocks.SecondsSinceAttacked < 30)
+                    return GetLang("REMOVE_ATTACKED_BLOCK", player.UserIDString, FormatTime(TimeSpan.FromSeconds(30 - (int)buildingBlocks.SecondsSinceAttacked)));
+            }
+
+            if (Block.Friends && player.userID != buildingBlock.OwnerID)
+            {
+                if (!IsFriends(player.userID, buildingBlock.OwnerID))
+                    return GetLang("REMOVE_ONLY_FRIENDS", player.UserIDString);
+                else if (player.IsBuildingBlocked())
+                    return GetLang("REMOVE_NO_AUTH", player.UserIDString);
+            }
+            else if (player.IsBuildingBlocked())
+                return GetLang("REMOVE_NO_AUTH", player.UserIDString);
+
+            if (RemoveTimed.UseTimesBlock && IsBlockBuild(buildingBlock.net.ID))
+                return GetLang("REMOVE_TIME_EXECUTE", player.UserIDString, FormatTime(TimeSpan.FromSeconds(GetTimerBlock(buildingBlock.net.ID))));
+
+            if (RemoveTimed.UseAllBlock && IsBlockBuildPemanent(buildingBlock.net.ID))
+                return GetLang("REMOVE_TIME_EXECUTE_UNREMOVE", player.UserIDString);
+
+            if (Block.ShortnameNoteReturned.Contains(Regex.Replace(buildingBlock.ShortPrefabName.Replace("mining_quarry", "mining.quarry"), "\\.deployed|_deployed", "")))
+                return GetLang("REMOVE_UNREMOVE", player.UserIDString);
+
+            return "";
+        }
+
+        public void RemoveBuilding(BasePlayer player, BaseEntity buildingBlock)
+        {
+            String Alert = RemoveErrorParseBuilding(player, buildingBlock);
+            if (!String.IsNullOrWhiteSpace(Alert))
+            {
+                Interface_Error(player, Alert);
                 return;
             }
 
-            ReturnedRemoveItems(player, entity);
+            ReturnedRemoveItems(player, buildingBlock);
 
             NextTick(() => {
                 {
-                    StorageContainer container = entity as StorageContainer;
+                    StorageContainer container = buildingBlock.GetComponent<StorageContainer>();
                     if (container != null) 
                         container.DropItems();
 
-                    entity.Kill(BaseNetworkable.DestroyMode.Gib);
+                    buildingBlock.Kill(BaseNetworkable.DestroyMode.Gib);
                 }
             });
-            
-            repositoryUser.ResetTimer(player);
+            DataPlayer[player.userID].ActiveTime = (int)(config.RemoveSetting.RemoveTime + CurrentTime());
         }
-        
-        private String NormalizePrefabName(String prefabName)
-        {
-            foreach (KeyValuePair<String, String> replacement in PrefabNameNormalized)
-                prefabName = prefabName.Replace(replacement.Key, replacement.Value);
-            
-            return Regex.Replace(prefabName, "\\.deployed|_deployed", "");
-        }
-        
-        private void ReturnedRemoveItems(BasePlayer player, BaseEntity entity)
-        {
-            String NormalizePrefab = NormalizePrefabName(entity.ShortPrefabName);
-
-            Configuration.RemovePreset.ReturnedSettings.Items ItemsSettings = config.RemovePresets.ReturnedRemoveSettings.ItemsSettings;
-            Configuration.RemovePreset.ReturnedSettings.Building BuildingSettings = config.RemovePresets.ReturnedRemoveSettings.BuildingSettings;
-
-            try
-            {
-                if (!ItemsSettings.ShortnameNoteReturned.Contains(NormalizePrefab))
-                    if (HandleItemReturn(player, entity, NormalizePrefab, ItemsSettings))
-                        return;
-            }
-            catch (Exception)
-            {
-                //PrintError(LanguageEn ? $"[NormalizePrefabName] Key name not found. Please notify the developer about this message and send them this text. Missing key normalizer for the prefab {entity.ShortPrefabName}" : $"[NormalizePrefabName] Not found key name. Сообщите разработчику об этом уведомлении и пришлите ему этот текст. Отсуствует ключ-нормализатор к префабу {entity.ShortPrefabName}");
-                return;
-            }
-
-            if (BuildingSettings.UseReturned && entity is StabilityEntity buildingBlock)
-                HandleBuildingReturn(player, buildingBlock, BuildingSettings);
-        }
-
-        private void HandleItemChildReturn(BaseEntity entity, BasePlayer player, Configuration.RemovePreset.ReturnedSettings.Items ItemsSettings)
-        {
-            if (!config.RemovePresets.ReturnedRemoveSettings.returnedChildItems) return;
-            foreach (BaseEntity.Slot slot in Enum.GetValues(typeof(BaseEntity.Slot)))
-            {
-                if (!entity.HasSlot(slot)) continue;
-                BaseEntity slotEntity = entity.GetSlot(slot);
-                if (slotEntity == null) continue;
-                
-                String NormalizeSlot = NormalizePrefabName(slotEntity.ShortPrefabName);
-                if (ItemsSettings.ShortnameNoteReturned.Contains(NormalizeSlot)) continue;
-                
-                Item itemSlotReturned = CreateItem(slotEntity, NormalizeSlot);
-                if (itemSlotReturned != null)
-                    player.GiveItem(itemSlotReturned);
-            }
-        }
-        private Boolean HandleItemReturn(BasePlayer player, BaseEntity entity, String NormalizePrefab, Configuration.RemovePreset.ReturnedSettings.Items ItemsSettings)
-        {
-            if (entity is BuildingBlock) return false;
-            Item ItemReturned = CreateItem(entity, NormalizePrefab);
-            
-            if (ItemsSettings.UseReturnedItem && ItemReturned != null)
-            {
-                if (ItemsSettings.UseDamageReturned && entity is BaseCombatEntity combatEntity)
-                {
-                    Single healthFraction = combatEntity.health / entity.MaxHealth();
-                    ItemReturned.conditionNormalized = Mathf.Clamp01(healthFraction - combatEntity.pickup.subtractCondition);
-                }
-
-                HandleItemChildReturn(entity, player, ItemsSettings);
-                
-                player.GiveItem(ItemReturned);
-                return true;
-            }
-            else if (entity is BaseCombatEntity combatEntity)
-            {
-                ItemDefinition itemDef = ItemManager.FindItemDefinition(ItemReturned.info.shortname);
-                if (itemDef == null || itemDef.Blueprint == null || itemDef.Blueprint.ingredients == null)
-                {
-                    HandleItemChildReturn(entity, player, ItemsSettings);
-                    player.GiveItem(ItemReturned);
-                    return true;
-                }
-                
-                Single PercentReturnResource = ItemsSettings.UsePercentHealts
-                    ? combatEntity.health / combatEntity.MaxHealth()
-                    : ItemsSettings.PercentReturn / 100.0f;
-
-                foreach (ItemAmount CostReturned in itemDef.Blueprint.ingredients)
-                {
-                    Int32 Amount = Mathf.FloorToInt(CostReturned.amount * PercentReturnResource);
-                    if (Amount <= 0 && CostReturned.amount == 1)
-                    {
-                        if (UnityEngine.Random.value > 0.5f)
-                            Amount = 1;
-                        else continue;
-                    }
-                    
-                    HandleItemChildReturn(entity, player, ItemsSettings);
-                    player.GiveItem(ItemManager.Create(CostReturned.itemDef, Amount));
-                }
-
-                return true;
-            }
-
-            if (IQRecycler?.Call<Boolean>("API_IsValidRecycler", entity) != true) return false;
-            Item RecyclerReturned = IQRecycler.Call<Item>("API_GetItemRecyclerAfterRemove", entity, player);
-            player.GiveItem(RecyclerReturned);
-
-            return true;
-        }
-
-        private Item CreateItem(BaseEntity entity, String normalizePrefab)
-        {
-            var skinID = entity.skinID;
-
-            return entity switch
-            {
-                ModularCarGarage modularCarGarage when modularCarGarage.ShortPrefabName.Contains("electrical.modularcarlift") => ItemManager.CreateByName("modularcarlift", 1, skinID),
-                BaseCombatEntity baseCombatEntity => baseCombatEntity.pickup.itemTarget == null ? ItemManager.CreateByName(normalizePrefab, 1, skinID) : ItemManager.Create(baseCombatEntity.pickup.itemTarget, 1, skinID),
-                CodeLock _ => ItemManager.CreateByName(normalizePrefab, 1, skinID),
-                _ => null
-            };
-        }
-
-
-        private void HandleBuildingReturn(BasePlayer player, StabilityEntity buildingBlock, Configuration.RemovePreset.ReturnedSettings.Building BuildingSettings)
-        {
-            Single PercentReturn = BuildingSettings.UsePercentHealts
-                ? buildingBlock.health / buildingBlock.MaxHealth()
-                : BuildingSettings.PercentReturn / 100.0f;
-
-            foreach (ItemAmount CostReturned in buildingBlock.BuildCost())
-            {
-                Int32 amount = Mathf.FloorToInt(CostReturned.amount * PercentReturn);
-                if (amount <= 0) continue;
-                player.GiveItem(ItemManager.Create(CostReturned.itemDef, amount));
-            }
-        }
-        String CanRemove(BasePlayer player, BaseEntity entity)
-        {
-            Configuration.RemovePreset RemoveConfig = config.RemovePresets;
-            LocalRepositoryUser repository = LocalRepository[player];
-        
-            Object canRemove = Interface.Call("canRemove", player, entity);
-            if (canRemove != null)
-                return canRemove is String ? (String)canRemove : GetLang("REMOVE_NOT_REMOVE_OBJECT", player.UserIDString);
-            
-            if (permission.UserHasPermission(player.UserIDString, PermissionsRemoveAdmin))
-                return RemoveConfig.NoRemoveItems.Contains(Regex.Replace(
-                    entity.ShortPrefabName.Replace("mining_quarry", "mining.quarry"), "\\.deployed|_deployed", ""))
-                    ? GetLang("REMOVE_NOT_REMOVE_OBJECT", player.UserIDString)
-                    : "";
-            
-            if(entity.OwnerID == 0)
-                return GetLang("REMOVE_NOT_REMOVE_ALIEN_OBJECT", player.UserIDString);
-        
-            if (RemoveConfig.NoRemoveRaidBlock && IsRaidBlocked(player))
-                return GetLang("REMOVE_NO_ESCAPE", player.UserIDString);
-
-            Double CooldownTime = repository.GetCooldownTime();
-            if (CooldownTime > 0)
-                return GetLang("REMOVE_TIME_EXECUTE", player.UserIDString, FormatTime(TimeSpan.FromSeconds(CooldownTime), player.UserIDString));
-        
-            if(IQTurret)
-            {
-                if(entity is ElectricSwitch)
-                    if ((Boolean)IQTurret.CallHook("API_IS_TURRETLIST", entity))
-                        return GetLang("REMOVE_IQTURRET_NO_DELETE_TUMBLER", player.UserIDString);
-            }
-        
-            BuildingBlock buildingBlocks = entity as BuildingBlock;
-            if (buildingBlocks != null)
-            {
-                if (!config.RemovePresets.RemoveSecondsAttacks && buildingBlocks.SecondsSinceAttacked < 30)
-                    return GetLang("REMOVE_SINCE_ATTACKED_BLOCK", player.UserIDString, FormatTime(TimeSpan.FromSeconds(30 - (Int32)buildingBlocks.SecondsSinceAttacked), player.UserIDString));
-            }
-            BuildingPrivlidge privilege = player.GetBuildingPrivilege(player.WorldSpaceBounds());
-            
-            if (RemoveConfig.RemoveOnlyFriends && player.userID != entity.OwnerID)
-            {
-                if (!IsFriends(player, entity.OwnerID) || player.IsBuildingBlocked())
-                    return GetLang("REMOVE_NOT_REMOVE_ALIEN_OBJECT", player.UserIDString);
-            }
-            else if (privilege != null && !player.IsBuildingAuthed())
-                return GetLang("REMOVE_NOT_REMOVE_ALIEN_OBJECT", player.UserIDString);
-            else if (privilege == null && entity.OwnerID != player.userID)
-                return GetLang("REMOVE_NOT_REMOVE_ALIEN_OBJECT", player.UserIDString);
-            
-            Int32 TemporaryTimeBlock = Convert.ToInt32(GetTimeBlockBuild(TypeBlock.Temporary, entity.net.ID.Value));
-
-            if (RemoveConfig.TemporaryBlockBuildRemove.UseBlock && TemporaryTimeBlock > 0)
-                return GetLang("REMOVE_TIME_EXECUTE", player.UserIDString,
-                    FormatTime(TimeSpan.FromSeconds(TemporaryTimeBlock), player.UserIDString));
-
-            Int32 FullTimeBlock = Convert.ToInt32(GetTimeBlockBuild(TypeBlock.Full, entity.net.ID.Value));
-            if (RemoveConfig.FullBlockBuildRemove.UseBlock && FullTimeBlock < 0)
-                return GetLang("REMOVE_FULL_BLOCK_REMOVE", player.UserIDString);
-
-            return RemoveConfig.NoRemoveItems.Contains(Regex.Replace(entity.ShortPrefabName.Replace("mining_quarry", "mining.quarry"), "\\.deployed|_deployed", "")) ? GetLang("REMOVE_NOT_REMOVE_OBJECT", player.UserIDString) : "";
-        }
-
-        #endregion
-        
-        #region Upgrade / Remove All Object
-
-        private Dictionary<BasePlayer, Coroutine> RoutineUpgradeAllPlayers = new Dictionary<BasePlayer, Coroutine>();
-        private void AllObjectAction(BasePlayer player, BaseEntity entity)
-        {
-            LocalRepositoryUser repository = LocalRepository[player];
-            Boolean IsAllObjects = repository.IsAllObjects(player);
-            if (!IsAllObjects) return;
-            
-            List<BuildingBlock> buildingBlocks = GetBlocks(player, entity);
-            if (buildingBlocks == null)
-                return;
-
-            if (repository.selectedType == ActionType.Remove)
-            {
-                if (!permission.UserHasPermission(player.UserIDString, PermissionsAllObjectsRemove))
-                {
-                    MessageGameTipsError(player, GetLang("NO_PERMISSION", player.UserIDString));
-                    return;
-                }
-                
-                foreach (BuildingBlock Block in buildingBlocks)
-                    Block.Kill();
-            }
-            else if (repository.selectedType != ActionType.None && repository.selectedType != ActionType.Remove)
-            {
-                BuildingGrade.Enum gradeType = (BuildingGrade.Enum)repository.GetGradeLevel;                                           
-                List<BuildingBlock> blocksToChange = buildingBlocks.Where(block => block.grade != gradeType && (permission.UserHasPermission(player.UserIDString, PermissionAllObjectsBack) || config.UpgradePresets.BackUpgrade || repository.GetGradeLevel > (Int32)block.grade)).ToList();
-            
-                IEnumerator processUpgradeBlocks = ProcessUpgradeBlocks(blocksToChange, gradeType, player);
-                
-                if(RoutineUpgradeAllPlayers.ContainsKey(player))
-                    if (RoutineUpgradeAllPlayers[player] != null)
-                        ServerMgr.Instance.StopCoroutine(RoutineUpgradeAllPlayers[player]);
-                    
-                Coroutine upgradeAllRoutine = ServerMgr.Instance.StartCoroutine(processUpgradeBlocks);
-                RoutineUpgradeAllPlayers[player] = upgradeAllRoutine;
-                
-                repository.ResetTimer(player);
-            }
-
-            Pool.FreeUnmanaged(ref buildingBlocks);
-        }
-
-        private IEnumerator ProcessUpgradeBlocks(List<BuildingBlock> blocksToChange, BuildingGrade.Enum gradeType,
-            BasePlayer player)
-        {
-            Int32 tryUpObjectFinded = 0;
-            for (Int32 i = 0; i < blocksToChange.Count; i++)
-            {
-                BuildingBlock Block = blocksToChange[i];
-                if (!permission.UserHasPermission(player.UserIDString, PermissionGRNoResource) && 
-                    !Block.CanAffordUpgrade(gradeType, Block.skinID, player))
-                {
-                    MessageGameTipsError(player, GetLang("UPGRADE_NOT_ENOUGHT_RESOURCE", player.UserIDString));
-                    yield break;
-                }
-                
-                if (Block.name.Contains("foundation") && DeployVolume.Check(Block.transform.position, Block.transform.rotation, PrefabAttribute.server.FindAll<DeployVolume>(Block.prefabID), ~(1 << Block.gameObject.layer)))
-                {
-                    tryUpObjectFinded++;
-                    continue;
-                }
-                
-                if (config.UpgradePresets.BackUpgradeReturnedItem)
-                {
-                    if ((Int32)gradeType <= (Int32)Block.grade)
-                    {
-                        foreach (ItemAmount itemAmount in Block.BuildCost())
-                        {
-                            Int32 amountItem = (Int32)(itemAmount.amount * (config.UpgradePresets.BackUpgradeReturnedItemPercent / 100.0f));
-                            if(amountItem <= 0) continue;
-
-                            Item backItem = ItemManager.CreateByName(itemAmount.itemDef.shortname, amountItem);
-                            if (backItem == null) continue;
-                            player.GiveItem(backItem);
-                        }
-                    }
-                }
-
-                ConstructionGrade grade = Block.blockDefinition.GetGrade(gradeType, 0);
-                if (!permission.UserHasPermission(player.UserIDString, PermissionGRNoResource))
-                    Block.PayForUpgrade(grade, player);
-
-                Block.SetHealthToMax();
-
-                UInt64 SkinBuilding = GetBuildingSkin(player, gradeType);
-                Block.ChangeGradeAndSkin(gradeType, SkinBuilding, true, true);
-
-                yield return new WaitForSeconds(0.05f);
-            }
-
-            if (tryUpObjectFinded != 0)
-                MessageGameTipsError(player, GetLang("ALL_OBJECTS_FINDED_OBJECT", player.UserIDString));
-        }
-
-        private List<BuildingBlock> GetBlocks(BasePlayer player, BaseEntity buildingBlock)
-        {
-            if (buildingBlock.GetBuildingPrivilege() == null || !player.IsBuildingAuthed())
-            {
-                MessageGameTipsError(player, GetLang("ALL_OBJECTS_NO_AUTH", player.UserIDString));
-                return null;
-            }
-
-            List<BuildingBlock> buildingBlocks = Pool.Get<List<BuildingBlock>>();
-            
-            foreach (BuildingBlock Block in buildingBlock.GetBuildingPrivilege().GetBuilding().buildingBlocks)
-                if (!buildingBlocks.Contains(Block))
-                    buildingBlocks.Add(Block);
-
-            return buildingBlocks;
-        }
-        
-        #endregion
-        
-
-        #region Help
-
-        private void MessageGameTipsError(BasePlayer player, String Message)
-        {
-            player.SendConsoleCommand("gametip.showtoast", new Object[]{ "1", Message, "15" });
-            Effect.server.Run("assets/bundled/prefabs/fx/invite_notice.prefab", player.GetNetworkPosition());
-        }
-
-        private String FormatTime(TimeSpan time, String userID)
-        {
-            StringBuilder result = new StringBuilder();
-
-            if (time.Days > 0)
-                result.Append(Format(time.Days, GetLang("FORMAT_TIME_DAY", userID)));
-
-            if (time.Hours > 0)
-                result.Append($" {Format(time.Hours, GetLang("FORMAT_TIME_HOURSE", userID))}");
-
-            if (time.Minutes > 0)
-                result.Append($" {Format(time.Minutes, GetLang("FORMAT_TIME_MINUTES", userID))}");
-
-            if (time.Days == 0 && time.Hours == 0 && time.Minutes == 0 && time.Seconds > 0)
-                result.Append($" {Format(time.Seconds, GetLang("FORMAT_TIME_SECONDS", userID))}");
-
-            return result.ToString().Trim();
-        }
-
-        private String Format(Int32 units, String form)
-        {
-            Int32 tmp = units % 10;
-    
-            if (units >= 5 && units <= 20 || tmp >= 5 && tmp <= 9)
-                return $"{units}{form}";
-
-            if (tmp >= 2 && tmp <= 4)
-                return $"{units}{form}";
-
-            return $"{units}{form}";
-        }
-
-
-        #endregion
-        
         #endregion
 
         #region Commands
 
-        [ConsoleCommand("close.ui.func")]
-        private void ClosedUI(ConsoleSystem.Arg arg)
+        [ConsoleCommand("up")]
+        void UPCommandConsole(ConsoleSystem.Arg arg)
         {
             BasePlayer player = arg.Player();
             if (player == null) return;
-            LocalRepository[player].DeleteTimerUI(player);
+
+            var Data = DataPlayer[player.userID];
+
+            Int32 GradeLevel;
+            if (arg?.Args != null && Int32.TryParse(arg.Args[0], out GradeLevel))
+            {
+                if (GradeLevel < 0 || GradeLevel > 4)
+                    return;
+
+                Data.GradeUP(player, true, GradeLevel);
+            }
+            else Data.GradeUP(player);
+
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                Interface_New_Main(player);
+
+            GradeRemove_Status(player);
+
+            if (Data.GradeLevel != 0)
+                UpdateButton_Upgrade(player);
+            else CuiHelper.DestroyUi(player, $"UpgradeButtonStatus");
         }
 
-        [ConsoleCommand("upgrade.func")]
-        private void UpgradeFuncCMD(ConsoleSystem.Arg arg)
+        [ConsoleCommand("building.upgrade")]
+        void BUpgradeCommandConsole(ConsoleSystem.Arg arg)
         {
             BasePlayer player = arg.Player();
             if (player == null) return;
-            
-            LocalRepository[player].ActionAssignment(player, Convert.ToInt32(arg.Args[0]));
+            var Data = DataPlayer[player.userID];
+
+            Int32 GradeLevel;
+            if (arg?.Args != null && Int32.TryParse(arg.Args[0], out GradeLevel))
+            {
+                if (GradeLevel < 0 || GradeLevel > 4)
+                    return;
+
+                Data.GradeUP(player, true, GradeLevel);
+            }
+            else Data.GradeUP(player);
+
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                Interface_New_Main(player);
+
+            GradeRemove_Status(player);
+
+            if (Data.GradeLevel != 0)
+                UpdateButton_Upgrade(player);
+            else CuiHelper.DestroyUi(player, $"UpgradeButtonStatus");
+        }
+
+        [ConsoleCommand("remove")]
+        void RemoveCommandConsole(ConsoleSystem.Arg arg)
+        {
+            BasePlayer player = arg.Player();
+            if (player == null) return;
+            var Data = DataPlayer[player.userID];
+            if (Data.GradeLevel == 5)
+                Data.GradeUP(player, true, 0);
+            else Data.GradeUP(player, true, 5);
+
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                Interface_New_Main(player);
+
+            GradeRemove_Status(player);
+        }
+
+        [ChatCommand("up")]
+        void UPCommand(BasePlayer player, string cmd, string[] arg)
+        {
+            var Data = DataPlayer[player.userID];
+            switch (arg.Length)
+            {
+                case 0:
+                    {
+                        Data.GradeUP(player);
+                        break;
+                    }
+                case 1:
+                    {
+                        Int32 GradeLevel;
+                        if (!int.TryParse(arg[0], out GradeLevel) || GradeLevel < 0 || GradeLevel > 4)
+                            return;
+                        
+                        Data.GradeUP(player, true, GradeLevel);
+                        break;
+                    }
+            }
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                Interface_New_Main(player);
+
+            GradeRemove_Status(player);
+
+            if (Data.GradeLevel != 0)
+                UpdateButton_Upgrade(player);
+            else CuiHelper.DestroyUi(player, $"UpgradeButtonStatus");
         }
         
-        private void ChatCMDUp(BasePlayer player, String cmd, String[] args)
+        [ChatCommand("bgrade")]
+        void BGradeChatCommand(BasePlayer player, string cmd, string[] arg)
         {
-            if (args.Length >= 1)
-                ControllerGradeRemove(player, args[0]);
-            else ControllerGradeRemove(player);
+            var Data = DataPlayer[player.userID];
+            switch (arg.Length)
+            {
+                case 0:
+                    {
+                        Data.GradeUP(player);
+                        break;
+                    }
+                case 1:
+                    {
+                        int GradeLevel;
+                        if (!int.TryParse(arg[0], out GradeLevel) || GradeLevel < 0 || GradeLevel > 4)
+                            return;
+                        
+                        Data.GradeUP(player, true, GradeLevel);
+                        break;
+                    }
+            }
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                Interface_New_Main(player);
 
-            if (!config.useInstructionAlert) return;
-            if (playerAlerUp.Contains(player)) return;
-            MessageGameTipsError(player, GetLang("UPGRADE_UP_USE_INSTRUCTION", player.UserIDString));
-            playerAlerUp.Add(player);
+            GradeRemove_Status(player);
+
+            if (Data.GradeLevel != 0)
+                UpdateButton_Upgrade(player);
+            else CuiHelper.DestroyUi(player, $"UpgradeButtonStatus");
         }
-
-        private void ChatCMDRemove(BasePlayer player)
+        [ChatCommand("remove")]
+        void RemoveCommand(BasePlayer player, string cmd, string[] arg)
         {
-            ControllerGradeRemove(player, "5");
+            var Data = DataPlayer[player.userID];
+            if (Data.GradeLevel == 5)
+                Data.GradeUP(player, true, 0);
+            else Data.GradeUP(player, true, 5);
 
-            if (!config.useInstructionAlert) return;
-            if (playerAlerRemove.Contains(player)) return;
-            MessageGameTipsError(player, GetLang("UPGRADE_REMOVE_USE_INSTRUCTION", player.UserIDString));
-            playerAlerRemove.Add(player);
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                Interface_New_Main(player);
+
+            GradeRemove_Status(player);
         }
+   
 
-        private void ConsoleCMDUp(ConsoleSystem.Arg arg) 
+        [ConsoleCommand("gr.func.turned")] 
+        void UI_ConsoleCommandAdminMenu(ConsoleSystem.Arg arg)
         {
             BasePlayer player = arg.Player();
             if (player == null) return;
-            ControllerGradeRemove(player);
-        }
+            var Data = DataPlayer[player.userID];
 
-        private void ConsoleCMDRemove(ConsoleSystem.Arg arg)
-        {
-            BasePlayer player = arg.Player();
-            if (player == null) return;
-            
-            ControllerGradeRemove(player, "5");
-        }
-        
-        [ConsoleCommand("func.turn.all.objects")]
-        private void FuncCommandAllObjects(ConsoleSystem.Arg arg)
-        {
-            BasePlayer player = arg.Player();
-            if (player == null) return;
+            if (Data.GradeAllObject)
+                Data.GradeAllObject = false;
+            else Data.GradeAllObject = true;
 
-            LocalRepositoryUser localRepositoryUser = LocalRepository[player];
-            if (!localRepositoryUser.HasAllObjectsPermission(player)) return;
-            
-            localRepositoryUser.TurnedAllObjects(player);
+            GradeRemove_AllObject_Turned(player);
         }
-
         #endregion
 
         #region Hooks
-
-        #region Core Hooks
-        private Int32 GetFilteredCollidersCount(Collider[] colliders, int count)
-        {
-            return colliders.Take(count).Count(x =>
-                x.name.Contains("assets") &&
-                !x.name.Contains("building") &&
-                !x.name.Contains("player"));
-        }
-
-        
-        private Boolean CheckNearbyCollider(BuildingBlock block)
-        {
-            Collider[] colliders = new Collider[30];
-            Int32 colliderCount = Physics.OverlapSphereNonAlloc(block.CenterPoint() + new Vector3(0f, 0f, 0f), 2f, colliders);
-            Int32 FilteredCountFloor = GetFilteredCollidersCount(colliders, colliderCount);
-  
-            return FilteredCountFloor < 1;
-        }
-        
-        private void OnPlayerInput(BasePlayer player, InputState input)
-        {
-            if (!input.IsDown(BUTTON.FIRE_PRIMARY))
-                return;
-            
-            Single currentTime = Time.time;
-            if (lastCheckTime.TryGetValue(player.userID, out Single lastTime))
-            {
-                if (currentTime - lastTime < 1f) 
-                    return;
-            }
-            else lastCheckTime.Add(player.userID, 0);
-
-            lastCheckTime[player.userID] = currentTime;
-
-            if (!(player.GetHeldEntity() is Hammer))
-                return;
-            
-            RaycastHit hit;
-            if (!Physics.Raycast(player.eyes.HeadRay(), out hit, 3.0f, LayerMask.GetMask("Construction")))
-                return;
-
-            BuildingBlock block = hit.GetEntity() as BuildingBlock;
-            if (block == null)
-                return;
-
-            if (!CheckNearbyCollider(block)) return;
-
-            LocalRepositoryUser repositoryUser = LocalRepository[player];
-            if (repositoryUser.IsAllObjects(player))
-            {
-                AllObjectAction(player, block);
-                return;
-            }
-
-            if (repositoryUser.selectedType == ActionType.Remove)
-                RemoveHit(player, block, repositoryUser);
-            else UpgradeHit(player, block, repositoryUser);
-        }
-        
         void OnHammerHit(BasePlayer player, HitInfo info)
         {
             if (info == null || player == null || info.HitEntity == null) return;
-            LocalRepositoryUser repositoryUser = LocalRepository[player];
-            BaseEntity hitEntity = info.HitEntity;
+            var Data = DataPlayer[player.userID];
 
-            if (repositoryUser.IsAllObjects(player))
+            if (Data.GradeLevel == 5)
+                if (info.HitEntity is BaseEntity)
+                    RemoveBuilding(player, info.HitEntity);
+
+            BuildingBlock buildingBlock = info.HitEntity as BuildingBlock;
+            if (buildingBlock == null) return;
+
+            if (Data.GradeAllObject && Data.GradeLevel > 0 && Data.GradeLevel != 5)
             {
-                AllObjectAction(player, hitEntity);
+                GradeAll(player, buildingBlock);
+                return;
+            }
+            if(Data.GradeAllObject && Data.GradeLevel == 5)
+            {
+                RemoveAll(player, buildingBlock);
                 return;
             }
 
-            if (repositoryUser.selectedType == ActionType.Remove)
-                RemoveHit(player, hitEntity, repositoryUser);
-            else if(repositoryUser.selectedType != ActionType.Remove && repositoryUser.selectedType != ActionType.None) 
-                UpgradeHit(player, hitEntity, repositoryUser);
-        }
-        
-        Object OnStructureRepair(BaseCombatEntity entity, BasePlayer player)
-        {
-            if (entity == null || player == null) return null;
-            
-            if (LocalRepository[player].selectedType != ActionType.Remove && LocalRepository[player].selectedType != ActionType.None && !config.UpgradePresets.RepairToGrade)
-                return false;
-            
-            if (LocalRepository[player].selectedType == ActionType.Remove)
-                return false;
-            
-            return null;
-        }
-        
-        object OnPayForUpgrade(BasePlayer player, BuildingBlock block, ConstructionGrade gradeTarget)
-        {
-            if (permission.UserHasPermission(player.UserIDString, PermissionGRNoResource))
-                return false;
-            return null;
-        }
-        
-        Object OnStructureUpgrade(BaseCombatEntity entity, BasePlayer player, BuildingGrade.Enum grade)
-        {
-            BuildingBlock buildingBlock = entity as BuildingBlock;
-            if (buildingBlock == null) return null;
-            if(entity.prefabID is 1340890323 or 34089032) return null;
-            
-            Boolean isAutoBaseUpgrade = AutoBaseUpgrade != null && AutoBaseUpgrade.Call<Boolean>("IsBaseUpgradeProcess", entity.GetBuildingPrivilege());
-            String canUpgrade = config.disableControllRadialMenu || isAutoBaseUpgrade ? String.Empty : CanUpgrade(player, buildingBlock, LocalRepository[player], grade);
-            
-            if (String.IsNullOrWhiteSpace(canUpgrade))
+            if (Data.GradeLevel != 0 && Data.GradeLevel != 5)
             {
-                UInt64 SkinBuilding = GetBuildingSkin(player, grade);
+                if (buildingBlock.grade == (BuildingGrade.Enum)Data.GradeLevel)
+                    return;
                 
-                buildingBlock.SetHealthToMax();
-        
-                if (grade == BuildingGrade.Enum.Metal && SkinBuilding == 10221)
-                    buildingBlock.SetCustomColour(GetShippingContainerBlockColourForPlayer(player)); 
-                
-                return null;
+                GradeBuilding(player, buildingBlock);
             }
-            
-            MessageGameTipsError(player, canUpgrade);
-            return true;
         }
-        
-        object OnPayForPlacement(BasePlayer player, Planner planner, Construction construction)
+        object OnStructureUpgrade(BaseCombatEntity entity, BasePlayer player, BuildingGrade.Enum grade)
         {
-            if (planner.isTypeDeployable)
-                return null;
-            
-            if (!permission.UserHasPermission(player.UserIDString, PermissionGRNoResource))
-                return null;
-
-            return false;
+            String Alert = GradeErrorParse(player, entity.GetComponent<BuildingBlock>(), grade);
+            if (!String.IsNullOrWhiteSpace(Alert)) // grade
+            {
+                Interface_Error(player, Alert);
+                return false;
+            }
+            return null;
         }
-        
-        private void OnEntityKill(BaseEntity entity)
-        {
-            if (entity == null) return;
-            if (entity.prefabID is 1340890323 or 34089032) return;
-            if (entity.net == null) return;
-            if (!entity.OwnerID.IsSteamId()) return;
-            String ownerID = entity.OwnerID.ToString();
-            
-            RemoveBlockBuild(ownerID, TypeBlock.Temporary, entity.net.ID.Value);
-            RemoveBlockBuild(ownerID, TypeBlock.Full, entity.net.ID.Value);
-        }
-        
         private void OnEntityBuilt(Planner plan, GameObject go)
         {
-            if (plan == null) return;
-            BasePlayer player = plan.GetOwnerPlayer();
+            BasePlayer player = plan?.GetOwnerPlayer();
             if (player == null || go == null) return;
 
-            BaseEntity entity = go.ToBaseEntity();
-            if (entity == null) return;
-            if (entity.prefabID is 1340890323 or 34089032) return;
-            if (entity.net == null) return;
-      
-            SetupBlockBuild(player.UserIDString, TypeBlock.Temporary, entity.net.ID.Value);
-            SetupBlockBuild(player.UserIDString, TypeBlock.Full, entity.net.ID.Value);
+            if (go.ToBaseEntity() is BuildingBlock || go.ToBaseEntity() is BaseEntity)
+            {
+                AddRemoveBlockBuild(go.ToBaseEntity().net.ID, player.userID);
+                AddBlockBuild(go.ToBaseEntity().net.ID, player.userID);
+            }
 
-            BuildingBlock buildingBlock = entity as BuildingBlock;
+            BuildingBlock buildingBlock = go.ToBaseEntity().GetComponent<BuildingBlock>();
             if (buildingBlock == null) return;
-            LocalRepositoryUser repository = LocalRepository[player];
+            var Data = DataPlayer[player.userID];
+            if (Data == null) return;
+           // if (Data.GradeLevel == 6 || Data.GradeLevel == 7) return;
 
-            if (repository.selectedType != ActionType.None && repository.selectedType != ActionType.Remove)
-                UpgradeHit(player, buildingBlock, repository);
+            if (Data.GradeLevel != 0 && Data.GradeLevel != 5)
+                GradeBuilding(player, buildingBlock);
         }
-
-        #endregion
-        
-        private void Init()
+        void OnPlayerDeath(BasePlayer player, HitInfo info)
         {
-            ReadData();
-            _ = this;
+            if (player == null || info == null || player.userID < 2147483647) return;
+            CuiHelper.DestroyUi(player, GradeRemoveOverlay);
         }
-
+        #region Server Hooks
+        public static IQGradeRemove inst;
+        void Init() => ReadData();
         private void OnServerInitialized()
         {
-            if (AutoBaseUpgrade && AutoBaseUpgrade.Version < new VersionNumber(1, 2, 2))
-            {
-                NextTick(() =>
-                {
-                    PrintError(LanguageEn
-                        ? "You have an outdated version of AutoBaseUpgrade installed. Please update to version 1.2.2 or higher"
-                        : "У вас установлена устаревшая версия AutoBaseUpgrade, обновитесь до версии выше 1.2.2");
-                    Interface.Oxide.UnloadPlugin(Name);
-                });
-            }
-            if (config.CommandsList.UpgradeCommands.Count == 0)
-            {
-                PrintWarning(LanguageEn ? "You don't have upgrade commands, the plugin can't work" : "У вас не указаны команды для улучшения, плагин не может работать");
-                Interface.Oxide.UnloadPlugin(Name);
-                return;
-            }
-             
-            if (config.CommandsList.UpgradeCommands.Count == 0)
-            {
-                PrintWarning(LanguageEn ? "You don't have remove commands, the plugin can't work" : "У вас не указаны команды для удаления, плагин не может работать");
-                Interface.Oxide.UnloadPlugin(Name);
-                return;
-            }
-            
-            _imageUI = new ImageUI();
-            _imageUI.DownloadImage();
-
-            if (!config.UseDistanceFunc)
-                Unsubscribe("OnPlayerInput");
-            
+            inst = this;
+            foreach (var p in BasePlayer.activePlayerList)
+                OnPlayerConnected(p);
             RegisteredPermissions();
-
-            foreach (String upgradeCommand in config.CommandsList.UpgradeCommands)
-            {
-                cmd.AddChatCommand(upgradeCommand, this, nameof(ChatCMDUp));
-                cmd.AddConsoleCommand(upgradeCommand, this, nameof(ConsoleCMDUp));
-            }
-            foreach (String removeCommand in config.CommandsList.RemoveCommands)
-            {
-                cmd.AddChatCommand(removeCommand, this, nameof(ChatCMDRemove));
-                cmd.AddConsoleCommand(removeCommand, this, nameof(ConsoleCMDRemove));
-            }
-
-            if (config.RemovePresets.TemporaryBlockBuildRemove.UseBlock || config.RemovePresets.FullBlockBuildRemove.UseBlock)
-                timerSaveData = timer.Every(900f, () => WriteData());
-            else Unsubscribe(nameof(OnEntityKill));
-            
-            foreach (BasePlayer player in BasePlayer.activePlayerList)
-                OnPlayerConnected(player);
         }
-
-        private void OnNewSave(string filename)
+        void OnPlayerConnected(BasePlayer player) => RegisteredUser(player);
+        void Unload()
         {
-            if (FullBlockBuild != null && FullBlockBuild.Count != 0)
-                FullBlockBuild.Clear();
-            
-            if (TemporaryBlockBuild != null && TemporaryBlockBuild.Count != 0)
-                TemporaryBlockBuild.Clear();
-            
-            WriteData(true);
-        }
-        
-        private void OnServerShutdown() => Unload();
-        
-        private void Unload()
-        {
-            if (_ == null) return;
-            
-            InterfaceBuilder.DestroyAll();
-
             WriteData();
-
-            if (_imageUI != null)
+            foreach (var player in BasePlayer.activePlayerList)
             {
-                _imageUI.UnloadImages();
-                _imageUI = null;
+                CuiHelper.DestroyUi(player, GradeRemoveOverlay);
+                if (player.HasFlag(BaseEntity.Flags.Reserved10))
+                    player.SetFlag(BaseEntity.Flags.Reserved10, false);
             }
-            
-            if(FullBlockBuild != null && FullBlockBuild.Count != 0)
-                FullBlockBuild.Clear();
-            
-            if(TemporaryBlockBuild != null && TemporaryBlockBuild.Count != 0)
-                TemporaryBlockBuild.Clear();
-            
-            if(RoutineUpgradeAllPlayers != null && RoutineUpgradeAllPlayers.Count != 0)
-                foreach (KeyValuePair<BasePlayer,Coroutine> routineUpgradeAllPlayer in RoutineUpgradeAllPlayers)
-                {
-                    if(routineUpgradeAllPlayer.Value != null)
-                        ServerMgr.Instance.StopCoroutine(routineUpgradeAllPlayer.Value);
-                }
-            
-            _ = null;
         }
-
-        private void OnPlayerConnected(BasePlayer player) => RegisteredPlayer(player);
+        void OnNewSave(string filename)
+        {
+            BuildingRemoveTimers.Clear();
+            BuildingRemoveBlock.Clear();
+            WriteData();
+        }
+        #endregion
 
         #endregion
 
-        #region Interface
+        #region UI
+        public static String GradeRemoveOverlay = "GradeRemoveOverlay";
 
-        #region DrawUI
-        
-        private void DrawUI_StaticPanel(BasePlayer player)
+        [ChatCommand("grade")]
+        void Interface_New_Main(BasePlayer player)
         {
-            if (_interface == null) return;
-            CuiHelper.DestroyUi(player, InterfaceBuilder.UI_GREADE_REMOVE_OVERLAY);
+            var Data = DataPlayer[player.userID];
+            var Interface = config.InterfaceSetting;
+            var MainInterface = Interface.MainInterfaces;
+            Data.RebootTimer();
 
-            String Interface = InterfaceBuilder.GetInterface("UI_Static_Panel");
-            if (Interface == null) return;
-            
-            CuiHelper.AddUi(player, Interface);
-            
-            LocalRepositoryUser localRepositoryUser = LocalRepository[player];
-
-            for (Int32 i = 1; i < 6; i++)
-                DrawUI_Types(player, i, localRepositoryUser);
-
-            if (_.permission.UserHasPermission(player.UserIDString, PermissionsAllObjects))
-                DrawUI_Button_AllObject(player, localRepositoryUser.IsAllObjects(player));
-        }
-        
-        private void DrawUI_Types(BasePlayer player, Int32 Index, LocalRepositoryUser repositoryUser)
-        {
-            if (_interface == null) return;
-
-            String Interface = InterfaceBuilder.GetInterface("UI_TypeElement");
-            if (Interface == null) return;
-
-            ActionType type = (ActionType)Index;
-            String NameType = type.ToString();
-            Boolean isPermissionType = LocalRepository[player].HasPermissionTypes(player, Index);
-
-            String cmdType = isPermissionType ? type != ActionType.Remove ? $"upgrade.func {Index}" : $"{config.CommandsList.RemoveCommands[0]}" : String.Empty;
-            
-            String iconType = isPermissionType ? 
-                (type switch
-                {
-                    ActionType.Wood => "WOOD",
-                    ActionType.Stone => "STONE",
-                    ActionType.Metal => "METAL",
-                    ActionType.Hqm => "HQM",
-                    _ => "REMOVE"
-                }) : "NO_PERMISSION";
-
-            GenerateOffsets(config.InterfaceControllers.TypeElement.TypesElements.OffsetMin, config.InterfaceControllers.TypeElement.TypesElements.OffsetMax, config.InterfaceControllers.TypeElement.OffsetBetweenElements, Index, out String newOffsetMin, out String newOffsetMax);
-
-            Interface = Interface.Replace("%NAME_TYPE%", NameType);
-            Interface = Interface.Replace("%TYPE_ICON%", _imageUI.GetImage(iconType));
-            Interface = Interface.Replace("%COMMAND_TYPE%", cmdType);
-            Interface = Interface.Replace("%OFFSET_MIN%", newOffsetMin);
-            Interface = Interface.Replace("%OFFSET_MAX%", newOffsetMax);
-
-            CuiHelper.AddUi(player, Interface);
-            
-            if (type == repositoryUser.selectedType)
-                DrawUI_Types_Selected(player, NameType);
-        }
-        
-        void GenerateOffsets(String OffsetMin, String OffsetMax, Single OffsetBetween, Int32 Index, out String newOffsetMin, out String newOffsetMax)
-        {
-            String[] minParts = OffsetMin.Split(' ');
-            String[] maxParts = OffsetMax.Split(' ');
-
-            if (minParts.Length != 2 || maxParts.Length != 2)
+            if (player.HasFlag(BaseEntity.Flags.Reserved10))
             {
-                throw new ArgumentException(LanguageEn ? "OffsetMin and OffsetMax must have exactly two parts separated by a space" : "OffsetMin и OffsetMax должны состоять ровно из двух частей, разделенных пробелом");
+                Data.GradeLevel = 0;
+                CuiHelper.DestroyUi(player, GradeRemoveOverlay);
+                player.SetFlag(BaseEntity.Flags.Reserved10, false);
+                return;
             }
+            player.SetFlag(BaseEntity.Flags.Reserved10, true);
 
-            Single min0 = float.Parse(minParts[0]);
-            Single min1 = float.Parse(minParts[1]);
-        
-            Single max0 = float.Parse(maxParts[0]);
-            Single max1 = float.Parse(maxParts[1]);
-
-            newOffsetMin = $"{min0 - (OffsetBetween * (Index - 1))} {min1}";
-            newOffsetMax = $"{max0 - (OffsetBetween * (Index - 1))} {max1}";
-        }
-        
-        private void DrawUI_Types_Selected(BasePlayer player, String NameType)
-        {
-            if (_interface == null) return;
-
-            String Interface = InterfaceBuilder.GetInterface("UI_Selectel");
-            if (Interface == null) return;
-            
-            Interface = Interface.Replace("%NAME_TYPE%", NameType);
-
-            CuiHelper.AddUi(player, Interface);
-        }  
-        
-        private void DrawUI_Timer(BasePlayer player, Int32 TimeTick)
-        {
-            if (_interface == null) return;
-
-            String Interface = InterfaceBuilder.GetInterface("UI_Timer_Label");
-            if (Interface == null) return;
-            
-            Interface = Interface.Replace("%TIMER_TEXT%", TimeTick.ToString());
-
-            CuiHelper.AddUi(player, Interface);
-        }
-        
-        private void DrawUI_Timer_Update(BasePlayer player, Int32 TimeTick)
-        {
-            if (_interface == null) return;
-
-            String Interface = InterfaceBuilder.GetInterface("UI_Timer_Label_Update");
-            if (Interface == null) return;
-            
-            Interface = Interface.Replace("%TIMER_TEXT%", TimeTick.ToString());
-
-            CuiHelper.AddUi(player, Interface);
-        } 
-        
-        private void DrawUI_Button_AllObject(BasePlayer player, Boolean TurnedAllObject)
-        {
-            if (_interface == null) return;
-
-            String Interface = InterfaceBuilder.GetInterface("UI_AllObject_Button");
-            if (Interface == null) return;
-            
-            Interface = Interface.Replace("%ALL_BUTTON%", "func.turn.all.objects");
-
-            CuiHelper.AddUi(player, Interface);
-            
-            if(TurnedAllObject)
-                DrawUI_Button_AllObject_Selectel(player);
-        }
-
-        private void DrawUI_Button_AllObject_Selectel(BasePlayer player)
-        {
-            if (_interface == null) return;
-
-            String Interface = InterfaceBuilder.GetInterface("UI_Selectel_AllObject");
-            if (Interface == null) return;
-            
-            Interface = Interface.Replace("%ALL_BUTTON%", "func.turn.all.objects");
-
-            CuiHelper.AddUi(player, Interface);
-        }
-        
-        #endregion
-
-        private class InterfaceBuilder
-        {
-            #region Vars
-
-            public static InterfaceBuilder Instance;
-            public const String UI_GREADE_REMOVE_OVERLAY = "UI_GREADE_REMOVE_OVERLAY";
-            public Dictionary<String, String> Interfaces;
-
-            #endregion
-
-            #region Main
-
-            public InterfaceBuilder()
+            var container = new CuiElementContainer();
+            container.Add(new CuiPanel
             {
-                Instance = this;
-                Interfaces = new Dictionary<String, String>();
+                CursorEnabled = false,
+                Image = { Color = $"0.7075472 0.703154 0.5640352 0" },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "0 0", OffsetMin = "16.19 19.273", OffsetMax = "396.002 78.727" }
+            }, "Overlay", GradeRemoveOverlay);
 
-                Building_Static_Panel();
-                Building_TypeElement();
-                Building_Selectel();
-                Building_Timer();
-                Building_AllObjectButton();
-                Building_SelectelAllObjects();
-                Building_Timer_Update();
-            }
-
-            public static void AddInterface(String name, String json)
+            container.Add(new CuiPanel
             {
-                if (Instance.Interfaces.ContainsKey(name))
-                {
-                    _.PrintError($"Error! Tried to add existing cui elements! -> {name}");
-                    return;
-                }
+                CursorEnabled = false,
+                Image = { Color = HexToRustFormat(MainInterface.ColorPanel) },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "0 0", OffsetMin = "0.092 0.274", OffsetMax = "190.02047 30" }  
+            }, GradeRemoveOverlay, "InformationPanel");
 
-                Instance.Interfaces.Add(name, json);
-            }
-
-            public static String GetInterface(String name)
+            container.Add(new CuiPanel
             {
-                if (Instance.Interfaces.TryGetValue(name, out String json) == false)
-                    _.PrintWarning($"Warning! UI elements not found by name! -> {name}");
+                CursorEnabled = false,
+                Image = { Color = HexToRustFormat(MainInterface.ColorText) },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "159.871 1.976", OffsetMax = "-29.36 -1.9762047" }  
+            }, "InformationPanel", "LinePanel");
 
-                return json;
-            }
-
-            public static void DestroyAll()
+            if (Interface.MainInterfaces.ShowCloseButton)
             {
-                foreach (BasePlayer player in BasePlayer.activePlayerList)
-                    CuiHelper.DestroyUi(player, UI_GREADE_REMOVE_OVERLAY);
-            }
-
-            #endregion
-
-            private void Building_Static_Panel()
-            {
-                CuiElementContainer container = new CuiElementContainer();
-
-                container.Add(new CuiElement
-                {
-                    Name = UI_GREADE_REMOVE_OVERLAY,
-                    Parent = "Overlay",
-                    DestroyUi = UI_GREADE_REMOVE_OVERLAY,
-                    Components =
-                    {
-                        new CuiRawImageComponent { Color = "1 1 1 1", Png = _imageUI.GetImage("HUDPANEL") },
-                        new CuiRectTransformComponent
-                            { AnchorMin = config.InterfaceControllers.StaticPanel.AnchorMin, AnchorMax = config.InterfaceControllers.StaticPanel.AnchorMax, OffsetMin = config.InterfaceControllers.StaticPanel.OffsetMin, OffsetMax = config.InterfaceControllers.StaticPanel.OffsetMax }
-                    }
-                });
-
-                if (config.InterfaceControllers.closeUIUsed)
-                {
-                    container.Add(new CuiElement
-                    {
-                        Name = "CLOSE_BUTTON_IMG",
-                        Parent = UI_GREADE_REMOVE_OVERLAY,
-                        DestroyUi = "CLOSE_BUTTON_IMG",
-                        Components =
-                        {
-                            new CuiRawImageComponent { Color = "1 1 1 1", Png = _imageUI.GetImage("CLOSE_BUTTON") },
-                            new CuiRectTransformComponent
-                            {
-                                AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = "138.267 -25.333",
-                                OffsetMax = "188.933 25.333"
-                            }
-                        }
-                    });
-
-                    container.Add(new CuiButton
-                    {
-                        Button = { Color = "0 0 0 0", Command = "close.ui.func" },
-                        Text =
-                        {
-                            Text = "", Font = "robotocondensed-regular.ttf", FontSize = 14,
-                            Align = TextAnchor.MiddleCenter, Color = "0 0 0 0"
-                        },
-                        RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1" }
-                    }, "CLOSE_BUTTON_IMG", "CLOSE_BUTTON", "CLOSE_BUTTON");
-                }
-
-                AddInterface("UI_Static_Panel", container.ToJson());
-            }
-     
-            private void Building_Timer()
-            {
-                CuiElementContainer container = new CuiElementContainer();
-
-                container.Add(new CuiElement
-                {
-                    Name = "TimerInfo",
-                    Parent = UI_GREADE_REMOVE_OVERLAY,
-                    DestroyUi = "TimerInfo",
-                    Components =
-                    {
-                        new CuiTextComponent
-                        {
-                            Text = "%TIMER_TEXT%", Font = "robotocondensed-bold.ttf", FontSize = config.InterfaceControllers.TimerElements.SizeTimer,
-                            Align = TextAnchor.MiddleCenter, Color = "1 1 1 1"
-                        },
-                        new CuiRectTransformComponent
-                        {
-                            AnchorMin = config.InterfaceControllers.TimerElements.TimerPosition.AnchorMin, AnchorMax = config.InterfaceControllers.TimerElements.TimerPosition.AnchorMax, OffsetMin = config.InterfaceControllers.TimerElements.TimerPosition.OffsetMin,
-                            OffsetMax = config.InterfaceControllers.TimerElements.TimerPosition.OffsetMax
-                        }
-                    }
-                });
-                
-                AddInterface("UI_Timer_Label", container.ToJson());
-            }
-            
-            private void Building_Timer_Update()
-            {
-                CuiElementContainer container = new CuiElementContainer();
-
-                container.Add(new CuiElement
-                {
-                    Name = "TimerInfo",
-                    Parent = UI_GREADE_REMOVE_OVERLAY,
-                    Update = true,
-                    Components =
-                    {
-                        new CuiTextComponent
-                        {
-                            Text = "%TIMER_TEXT%", Font = "robotocondensed-bold.ttf", FontSize = config.InterfaceControllers.TimerElements.SizeTimer,
-                            Align = TextAnchor.MiddleCenter, Color = "1 1 1 1"
-                        },
-                        new CuiRectTransformComponent
-                        {
-                            AnchorMin = config.InterfaceControllers.TimerElements.TimerPosition.AnchorMin, AnchorMax = config.InterfaceControllers.TimerElements.TimerPosition.AnchorMax, OffsetMin = config.InterfaceControllers.TimerElements.TimerPosition.OffsetMin,
-                            OffsetMax = config.InterfaceControllers.TimerElements.TimerPosition.OffsetMax
-                        }
-                    }
-                });
-                
-                AddInterface("UI_Timer_Label_Update", container.ToJson());
-            }
-            
-            private void Building_TypeElement()
-            {
-                CuiElementContainer container = new CuiElementContainer();
-
-                container.Add(new CuiElement
-                {
-                    Name = "%NAME_TYPE%",
-                    Parent = UI_GREADE_REMOVE_OVERLAY,
-                    DestroyUi = "%NAME_TYPE%",
-                    Components =
-                    {
-                        new CuiRawImageComponent { Color = "1 1 1 1", Png = "%TYPE_ICON%" },
-                        new CuiRectTransformComponent
-                        {
-                            AnchorMin = config.InterfaceControllers.TypeElement.TypesElements.AnchorMin, AnchorMax = config.InterfaceControllers.TypeElement.TypesElements.AnchorMax, OffsetMin = "%OFFSET_MIN%",
-                            OffsetMax = "%OFFSET_MAX%"
-                        }
-                    }
-                });
-                
                 container.Add(new CuiButton
                 {
-                    Button = { Color = "0 0 0 0", Command = "%COMMAND_TYPE%"},
-                    Text = { Text = "", Font = "robotocondensed-regular.ttf", FontSize = 14, Align = TextAnchor.MiddleCenter, Color = "0 0 0 0" },
-                    RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "-4 -4", OffsetMax = "4 4" }
-                },"%NAME_TYPE%","ButtonType_%NAME_TYPE%", "ButtonType_%NAME_TYPE%");
-                
-                AddInterface("UI_TypeElement", container.ToJson());
+                    Button = { Color = HexToRustFormat(MainInterface.ColorPanel), Command = "chat.say /grade" },
+                    Text = { Text = Interface.MainInterfaces.SymbolCloseButton, Font = "robotocondensed-regular.ttf", FontSize = 10, Align = TextAnchor.MiddleCenter, Color = "1 1 1 1" },
+                    RectTransform = { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = "191.404 -29.453", OffsetMax = "210.07 0.273" }
+                }, GradeRemoveOverlay, "CloseUI");
             }
-            
-            private void Building_Selectel()
+
+            CuiHelper.DestroyUi(player, "GradeRemoveOverlay");
+            CuiHelper.AddUi(player, container);
+
+            GradeRemove_Status(player);
+            GradeRemove_AllObject_Turned(player);
+        }
+        void Update_Take_Button_UP(BasePlayer player)
+        {
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                return;
+
+            CuiHelper.DestroyUi(player, "ButtonUpgrade");
+            var Interface = config.InterfaceSetting;
+            var MainInterface = Interface.MainInterfaces;
+            var container = new CuiElementContainer();
+            var Data = DataPlayer[player.userID];
+
+            String ColorButton = Data.GradeLevel != 0 && Data.GradeLevel <= 4 ? "#373737" : MainInterface.ColorPanel;
+
+            container.Add(new CuiButton
             {
-                CuiElementContainer container = new CuiElementContainer();
+                Button = { Color = HexToRustFormat(ColorButton), Command = "chat.say /up" },
+                Text = { Text = GetLang("TITLE_TAKE_UP", player.UserIDString), Font = "robotocondensed-bold.ttf", FontSize = 12, Align = TextAnchor.MiddleCenter, Color = HexToRustFormat(MainInterface.ColorText) },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "0 0", OffsetMin = "193.415 0.273", OffsetMax = "284.785 29.999" }
+            }, "GradeRemoveOverlay", "ButtonUpgrade");
 
-                container.Add(new CuiElement
-                {
-                    Name = "SelectedElement",
-                    Parent = "%NAME_TYPE%",
-                    DestroyUi = "SelectedElement",
-                    Components = {
-                        new CuiRawImageComponent { Color = "1 1 1 1", Png = _imageUI.GetImage("SELECTED_ELEMENT")},
-                        new CuiRectTransformComponent { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = $"-{config.InterfaceControllers.TypeElement.SizeSelectedElement} -{config.InterfaceControllers.TypeElement.SizeSelectedElement}", OffsetMax = 
-                            $"{config.InterfaceControllers.TypeElement.SizeSelectedElement} {config.InterfaceControllers.TypeElement.SizeSelectedElement}" }
-                    }
-                });
-                
-                AddInterface("UI_Selectel", container.ToJson());
-            }
-            
-            private void Building_SelectelAllObjects()
+            CuiHelper.AddUi(player, container);
+        }
+        void Update_Take_Button_REMOVE(BasePlayer player)
+        {
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                return;
+            CuiHelper.DestroyUi(player, "ButtonRemove");
+            CuiHelper.DestroyUi(player, $"UpgradeButtonStatus");
+
+            var Interface = config.InterfaceSetting;
+            var MainInterface = Interface.MainInterfaces;
+            var container = new CuiElementContainer();
+            var Data = DataPlayer[player.userID];
+
+            String ColorButton = Data.GradeLevel > 4 ? "#373737" : MainInterface.ColorPanel;
+
+            container.Add(new CuiButton
             {
-                CuiElementContainer container = new CuiElementContainer();
+                Button = { Color = HexToRustFormat(ColorButton), Command = "chat.say /remove" },
+                Text = { Text = GetLang("TITLE_TAKE_REMOVE", player.UserIDString), Font = "robotocondensed-bold.ttf", FontSize = 12, Align = TextAnchor.MiddleCenter, Color = HexToRustFormat(MainInterface.ColorText) },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "0 0", OffsetMin = "288.535 0.273", OffsetMax = "379.905 29.999" }
+            }, "GradeRemoveOverlay", "ButtonRemove");
 
-                container.Add(new CuiElement
-                {
-                    Name = "SelectedElementAllObject",
-                    Parent = "AllType",
-                    DestroyUi = "SelectedElementAllObject",
-                    Components = {
-                        new CuiRawImageComponent { Color = "1 1 1 1", Png = _imageUI.GetImage("SELECTED_ELEMENT")},
-                        new CuiRectTransformComponent { AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = $"-{config.InterfaceControllers.AllObject.SizeSelectedElement} -{config.InterfaceControllers.AllObject.SizeSelectedElement}", OffsetMax = $"{config.InterfaceControllers.AllObject.SizeSelectedElement} {config.InterfaceControllers.AllObject.SizeSelectedElement}" }
-                    }
-                });
-                
-                container.Add(new CuiButton
-                {
-                    Button = { Color = "0 0 0 0", Command = "%ALL_BUTTON%"},
-                    Text = { Text = "", Font = "robotocondensed-regular.ttf", FontSize = 14, Align = TextAnchor.MiddleCenter, Color = "0 0 0 0" },
-                    RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "-4 -4", OffsetMax = "4 4" }
-                },"SelectedElementAllObject","AllType_Button", "AllType_Button");
-                
-                AddInterface("UI_Selectel_AllObject", container.ToJson());
-            }
-
-            private void Building_AllObjectButton()
-            {
-                CuiElementContainer container = new CuiElementContainer();
-
-                container.Add(new CuiElement
-                {
-                    Name = "AdminAllObjects",
-                    Parent = UI_GREADE_REMOVE_OVERLAY,
-                    DestroyUi = "AdminAllObjects",
-                    Components =
-                    {
-                        new CuiRawImageComponent { Color = "1 1 1 1", Png = _imageUI.GetImage("ALL_BUTTON") },
-                        new CuiRectTransformComponent
-                        {
-                            AnchorMin = config.InterfaceControllers.AllObject.AllObjectsButton.AnchorMin, AnchorMax = config.InterfaceControllers.AllObject.AllObjectsButton.AnchorMax, OffsetMin = config.InterfaceControllers.AllObject.AllObjectsButton.OffsetMin,
-                            OffsetMax = config.InterfaceControllers.AllObject.AllObjectsButton.OffsetMax
-                        }
-                    }
-                });
-                
-                container.Add(new CuiElement
-                {
-                    Name = "AllType",
-                    Parent = "AdminAllObjects",
-                    DestroyUi = "AllType",
-                    Components =
-                    {
-                        new CuiRawImageComponent { Color = "1 1 1 1", Png = _imageUI.GetImage("ALL") },
-                        new CuiRectTransformComponent
-                        {
-                            AnchorMin = "0.5 0.5", AnchorMax = "0.5 0.5", OffsetMin = "-17.33321 -17.33408904",
-                            OffsetMax = "17.333 17.333"
-                        }
-                    }
-                });
-                
-                container.Add(new CuiButton
-                {
-                    Button = { Color = "0 0 0 0", Command = "%ALL_BUTTON%"},
-                    Text = { Text = "", Font = "robotocondensed-regular.ttf", FontSize = 14, Align = TextAnchor.MiddleCenter, Color = "0 0 0 0" },
-                    RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "-4 -4", OffsetMax = "4 4" }
-                },"AllType","AllType_Button", "AllType_Button");
-
-                
-                AddInterface("UI_AllObject_Button", container.ToJson());
-            }
+            CuiHelper.AddUi(player, container);
         }
 
-
-        #region ImageLoader
-
-        private class ImageUI
+        void GradeRemove_Status(BasePlayer player)
         {
-            private const String _path = "IQSystem/IQGradeRemove/Images/";
-            private const String _printPath = "data/" + _path;
-            private readonly Dictionary<String, ImageData> _images = new()
-            {
-                { "HUDPANEL", new ImageData() },
-                { "SELECTED_ELEMENT", new ImageData() },
-                { "NO_PERMISSION", new ImageData() },
-                { "ALL_BUTTON", new ImageData() },
-                { "ALL", new ImageData() },
-                { "WOOD", new ImageData() },
-                { "STONE", new ImageData() },
-                { "METAL", new ImageData() },
-                { "HQM", new ImageData() },
-                { "REMOVE", new ImageData() },
-            };
+            UpdateLabelStatus(player);
+            Update_Take_Button_UP(player);
+            Update_Take_Button_REMOVE(player);
+        }
 
-            private enum ImageStatus
-            {
-                NotLoaded,
-                Loaded,
-                Failed
-            }
+        void GradeRemove_AllObject_Turned(BasePlayer player)
+        {
+            var Interface = config.InterfaceSetting;
+            var MainInterface = Interface.MainInterfaces;
+            var Data = DataPlayer[player.userID];
 
-            private class ImageData
-            {
-                public ImageStatus Status = ImageStatus.NotLoaded;
-                public string Id { get; set; }
-            }
+            CuiHelper.DestroyUi(player, $"AdminButtonDeleteAll");
 
-            public string GetImage(string name)
-            {
-                ImageData image;
-                if (_images.TryGetValue(name, out image) && image.Status == ImageStatus.Loaded)
-                    return image.Id;
-                return null;
-            }
+            CuiElementContainer container = new CuiElementContainer();
 
-            public void DownloadImage()
+            if (permission.UserHasPermission(player.UserIDString, PermissionGRMenu))
             {
-                if (config.InterfaceControllers.closeUIUsed)
-                    _images.TryAdd("CLOSE_BUTTON", new ImageData());
+                String ColorButton = Data.GradeAllObject ? "#373737" : MainInterface.ColorPanel;
 
-                KeyValuePair<string, ImageData>? image = null;
-                foreach (KeyValuePair<string, ImageData> img in _images)
+                container.Add(new CuiButton
                 {
-                    if (img.Value.Status == ImageStatus.NotLoaded)
-                    {
-                        image = img;
-                        break;
-                    }
-                }
+                    Button = { Color = HexToRustFormat(ColorButton), Command = "gr.func.turned" },
+                    Text = { Text = GetLang("TITLE_GR_ADMIN_ALL_OBJ", player.UserIDString), Font = "robotocondensed-bold.ttf", FontSize = 12, Align = TextAnchor.MiddleCenter, Color = HexToRustFormat(MainInterface.ColorText) },
+                    RectTransform = { AnchorMin = "0 0", AnchorMax = "0 0", OffsetMin = "193.415 31.363", OffsetMax = "379.905 59.727" }
+                }, "GradeRemoveOverlay", "AdminButtonDeleteAll");
+            }
 
-                if (image != null)
+            CuiHelper.AddUi(player, container);
+        }
+        void UpdateButton_Upgrade(BasePlayer player)
+        {
+            if (!config.InterfaceSetting.MainInterfaces.ShowLevelUp) return;
+
+            if (!player.HasFlag(BaseEntity.Flags.Reserved10))
+                return;
+
+            var Interface = config.InterfaceSetting;
+            var MainInterface = Interface.MainInterfaces;
+            var Data = DataPlayer[player.userID];
+            
+            CuiHelper.DestroyUi(player, $"UpgradeButtonStatus");
+
+            CuiElementContainer container = new CuiElementContainer();
+
+            container.Add(new CuiPanel
+            {
+                CursorEnabled = false,
+                Image = { Color = "0.2196079 0.2196079 0.2196079 0" },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "0 0", OffsetMin = "0.091 31.363", OffsetMax = "190.001 59.727" }
+            }, GradeRemoveOverlay, "UpgradeButtonStatus");
+
+            container.Add(new CuiButton
+            {
+                Button = { Color = HexToRustFormat(MainInterface.ColorPanel), Command = "up 1" },
+                Text = { Text = "", Font = "robotocondensed-regular.ttf", FontSize = 14, Align = TextAnchor.UpperLeft, Color = "1 1 1 1" },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "0 0", OffsetMax = "-145.386 0.364" }
+            }, "UpgradeButtonStatus", "ButtonUpgradeLevelOne");
+
+            String HexGradeWood = Data.GradeLevel == 1 ? "#F3F3F3" : "#373737";
+            String SpriteCheckWood = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[1]) ? "assets/icons/level_wood.png" : "assets/icons/occupied.png" : "assets/icons/level_wood.png";
+            String AnchorMinWood = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[1]) ? "0.2 0.1" : "0.25 0.15" : "0.2 0.1";
+            String AnchorMaxWood = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[1]) ? "0.8 0.9" : "0.75 0.85" : "0.8 0.9"; 
+
+            container.Add(new CuiPanel
+            {
+                Image = { Color = HexToRustFormat(HexGradeWood), Sprite = SpriteCheckWood },
+                RectTransform = { AnchorMin = AnchorMinWood, AnchorMax = AnchorMaxWood }
+            }, "ButtonUpgradeLevelOne", "SpriteLevelOne");
+
+            container.Add(new CuiButton
+            {
+                Button = { Color = HexToRustFormat(MainInterface.ColorPanel), Command = "up 2" },
+                Text = { Text = "", Font = "robotocondensed-regular.ttf", FontSize = 14, Align = TextAnchor.UpperLeft, Color = "1 1 1 1" },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "48.993 0", OffsetMax = "-96.393 0.364" }
+            }, "UpgradeButtonStatus", "ButtonUpgradeLeveTwo");
+
+            String HexGradeStone = Data.GradeLevel == 2 ? "#F3F3F3" : "#373737";
+            String SpriteCheckStone = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[2]) ? "assets/icons/level_stone.png" : "assets/icons/occupied.png" : "assets/icons/level_stone.png";
+            String AnchorMinStone = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[2]) ? "0.2 0.1" : "0.25 0.15" : "0.2 0.1";
+            String AnchorMaxStone = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[2]) ? "0.8 0.9" : "0.75 0.85" : "0.8 0.9";
+            container.Add(new CuiPanel
+            {
+                Image = { Color = HexToRustFormat(HexGradeStone), Sprite = SpriteCheckStone },
+                RectTransform = { AnchorMin = AnchorMinStone, AnchorMax = AnchorMaxStone }
+            }, "ButtonUpgradeLeveTwo", "SpriteLevelTwo");
+
+            container.Add(new CuiButton
+            {
+                Button = { Color = HexToRustFormat(MainInterface.ColorPanel), Command = "up 3" },
+                Text = { Text = "", Font = "robotocondensed-regular.ttf", FontSize = 14, Align = TextAnchor.UpperLeft, Color = "1 1 1 1" },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "96.893 0", OffsetMax = "-48.493 0.364" }
+            }, "UpgradeButtonStatus", "ButtonUpgradeLevelThree");
+
+            String HexGradeMetal = Data.GradeLevel == 3 ? "#F3F3F3" : "#373737";
+            String SpriteCheckMetal = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[3]) ? "assets/icons/level_metal.png" : "assets/icons/occupied.png" : "assets/icons/level_metal.png";
+            String AnchorMinMetal = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[3]) ? "0.2 0.1" : "0.25 0.15" : "0.2 0.1";
+            String AnchorMaxMetal = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[3]) ? "0.8 0.9" : "0.75 0.85" : "0.8 0.9";
+            container.Add(new CuiPanel
+            {
+                Image = { Color = HexToRustFormat(HexGradeMetal), Sprite = SpriteCheckMetal },
+                RectTransform = { AnchorMin = AnchorMinMetal, AnchorMax = AnchorMaxMetal }
+            }, "ButtonUpgradeLevelThree", "SpriteLevelThree");
+
+            container.Add(new CuiButton
+            {
+                Button = { Color = HexToRustFormat(MainInterface.ColorPanel), Command = "up 4" },
+                Text = { Text = "", Font = "robotocondensed-regular.ttf", FontSize = 14, Align = TextAnchor.UpperLeft, Color = "1 1 1 1" },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "145.386 0", OffsetMax = "0 0.364" }
+            }, "UpgradeButtonStatus", "ButtonUpgradeLevelFo");
+
+            String HexGradeTop = Data.GradeLevel == 4 ? "#F3F3F3" : "#373737";
+            String SpriteCheckTop = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[4]) ? "assets/icons/level_top.png" : "assets /icons/occupied.png" : "assets/icons/level_top.png";
+            String AnchorMinTop = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[4]) ? "0.2 0.1" : "0.25 0.15" : "0.2 0.1";
+            String AnchorMaxTop = config.UsePermission ? permission.UserHasPermission(player.UserIDString, PermissionsLevel[4]) ? "0.8 0.9" : "0.75 0.85" : "0.8 0.9";
+            container.Add(new CuiPanel
+            {
+                Image = { Color = HexToRustFormat(HexGradeTop), Sprite = SpriteCheckTop },
+                RectTransform = { AnchorMin = AnchorMinTop, AnchorMax = AnchorMaxTop }
+            }, "ButtonUpgradeLevelFo", "SpriteLevelFo");
+
+            CuiHelper.AddUi(player, container);
+        }
+
+        void UpdateLabelStatus(BasePlayer player)
+        {
+            CuiHelper.DestroyUi(player, "SpriteStatus");
+            CuiHelper.DestroyUi(player, "LabelStatus");
+            var Interface = config.InterfaceSetting;
+            var MainInterface = Interface.MainInterfaces;
+            var Data = DataPlayer[player.userID];
+
+            if (Data.ActiveTime - CurrentTime() <= 1 && Data.GradeLevel != 0)
+            {
+                Data.GradeLevel = 0;
+                if (Interface.MainInterfaces.HideMenuTimer)
                 {
-                    ServerMgr.Instance.StartCoroutine(ProcessDownloadImage(image.Value));
+                    Data.RebootTimer();
+                    CuiHelper.DestroyUi(player, GradeRemoveOverlay);
+                    player.SetFlag(BaseEntity.Flags.Reserved10, false);
                 }
                 else
                 {
-                    List<String> failedImages = new List<string>();
-
-                    foreach (KeyValuePair<String, ImageData> img in _images)
-                    {
-                        if (img.Value.Status == ImageStatus.Failed)
-                        {
-                            failedImages.Add(img.Key);
-                        }
-                    }
-
-                    if (failedImages.Count > 0)
-                    {
-                        String images = String.Join(", ", failedImages);
-                        _.PrintError(LanguageEn
-                            ? $"Failed to load the following images: {images}. Perhaps you did not upload them to the '{_printPath}' folder. Images - https://drive.google.com/drive/folders/1MYmWgN-KHWQhfFxNiweQo9h3SfPwsxDS"
-                            : $"Не удалось загрузить следующие изображения: {images}. Возможно, вы не загрузили их в папку '{_printPath}'. Картинки - https://drive.google.com/drive/folders/1MYmWgN-KHWQhfFxNiweQo9h3SfPwsxDS");
-                        Interface.Oxide.UnloadPlugin(_.Name);
-                    }
-                    else
-                    {
-                        _.Puts(LanguageEn
-                            ? $"{_images.Count} images downloaded successfully!"
-                            : $"{_images.Count} изображений успешно загружено!");
-                        
-                        _interface = new InterfaceBuilder();
-                    }
+                    CuiHelper.DestroyUi(player, $"UpgradeButtonStatus");
+                    GradeRemove_Status(player);
                 }
-            }
-            
-            public void UnloadImages()
-            {
-                foreach (KeyValuePair<string, ImageData> item in _images)
-                    if(item.Value.Status == ImageStatus.Loaded)
-                        if (item.Value?.Id != null)
-                            FileStorage.server.Remove(uint.Parse(item.Value.Id), FileStorage.Type.png, CommunityEntity.ServerInstance.net.ID);
-
-                _images?.Clear();
+                return;
             }
 
-            private IEnumerator ProcessDownloadImage(KeyValuePair<string, ImageData> image)
+            CuiElementContainer container = new CuiElementContainer();
+            String SpriteStatus = Data.GradeLevel == 0 ? "assets/icons/loading.png" : Data.GradeLevel != 0 && Data.GradeLevel <= 4 ? "assets/icons/upgrade.png" : "assets/icons/level_stone.png";
+
+            container.Add(new CuiPanel
             {
-                string url = "file://" + Interface.Oxide.DataDirectory + Path.DirectorySeparatorChar + _path + image.Key + ".png";
+                CursorEnabled = false,
+                Image = { Color = HexToRustFormat(MainInterface.ColorText), Sprite = SpriteStatus },
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "162.344 3.414", OffsetMax = "-4.744 -3.414" }
+            }, "InformationPanel", "SpriteStatus");
 
-                using (UnityWebRequest www = UnityWebRequestTexture.GetTexture(url))
-                {
-                    yield return www.SendWebRequest();
+            String LangStatus = Data.GradeLevel == 0 ? GetLang("TITLE_GR_ADMIN", player.UserIDString) : Data.GradeLevel != 0 && Data.GradeLevel <= 4 ?
+            GetLang("GRADE_TITLE", player.UserIDString, StatusLevels[Data.GradeLevel], FormatTime(TimeSpan.FromSeconds(Data.ActiveTime - CurrentTime()))) :
+            GetLang("REMOVE_TITLE", player.UserIDString, FormatTime(TimeSpan.FromSeconds(Data.ActiveTime - CurrentTime())));
 
-                    if (www.result is UnityWebRequest.Result.ConnectionError or UnityWebRequest.Result.ProtocolError)
-                    {
-                        image.Value.Status = ImageStatus.Failed;
-                    }
-                    else
-                    {
-                        Texture2D tex = DownloadHandlerTexture.GetContent(www);
-                        image.Value.Id = FileStorage.server.Store(tex.EncodeToPNG(), FileStorage.Type.png, CommunityEntity.ServerInstance.net.ID).ToString();
-                        image.Value.Status = ImageStatus.Loaded;
-                        UnityEngine.Object.DestroyImmediate(tex);
-                    }
-
-                    DownloadImage();
+            container.Add(new CuiElement
+            {
+                Name = "LabelStatus",
+                Parent = "InformationPanel",
+                Components = {
+                    new CuiTextComponent { Text = LangStatus, Font = "robotocondensed-bold.ttf", FontSize = 12, Align = TextAnchor.MiddleCenter, Color = HexToRustFormat(MainInterface.ColorText) },
+                    new CuiRectTransformComponent { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "0.044 0.137", OffsetMax = "-32.266 -0.136" }
                 }
-            }
+            });
+
+            CuiHelper.AddUi(player, container);
+
+            Data.RebootTimer();
+            if (Data.GradeLevel == 0)
+                return;
+            Data.TimerEvent = timer.Once(1f, () => UpdateLabelStatus(player));
         }
 
-        #endregion
-        
-        #endregion
-        
-        #region Lang
-        
-        private static StringBuilder sb = new StringBuilder();
+        void Interface_Error(BasePlayer player, String Message)
+        {
+            player.SendConsoleCommand("gametip.showtoast", new object[] 
+            {
+                "1",
+                Message
+            });
+            Effect.server.Run("assets/bundled/prefabs/fx/invite_notice.prefab", player.GetNetworkPosition());
+        }
 
-        private String GetLang(String LangKey, String userID = null, params Object[] args)
+        private static string HexToRustFormat(string hex)
+        {
+            Color color;
+            ColorUtility.TryParseHtmlString(hex, out color);
+            return string.Format("{0:F2} {1:F2} {2:F2} {3:F2}", color.r, color.g, color.b, color.a);
+        }
+
+        public static StringBuilder sb = new StringBuilder();
+        public string GetLang(string LangKey, string userID = null, params object[] args)
         {
             sb.Clear();
-            if (args == null) return lang.GetMessage(LangKey, this, userID);
-            sb.AppendFormat(lang.GetMessage(LangKey, this, userID), args);
-            return sb.ToString();
-        }
-        
-        private new void LoadDefaultMessages()
-        {
-            lang.RegisterMessages(new Dictionary<String, String>
+            if (args != null)
             {
-                ["UPGRADE_UP_USE_INSTRUCTION"] = "TO IMPROVE THE STRUCTURE, HIT IT WITH A HAMMER",
-                ["UPGRADE_REMOVE_USE_INSTRUCTION"] = "TO REMOVE A BUILDING, HIT IT WITH A HAMMER",
-                ["UPGRADE_FOREIGN_OBJECT"] = "ITEM INSIDE THE OBJECT",
-                ["UPGRADE_SINCE_ATTACKED_BLOCK"] = "OBJECT RECENTLY ATTACKED - CAN BE UPGRADED IN {0}",
-                ["UPGRADE_NO_AUTH_BUILDING"] = "CAN'T UPGRADE BUILDINGS ON FOREIGN TERRITORY",
-                ["UPGRADE_NO_AUTH_BUILDING_CUPBOARD"] = "THE IMPROVEMENT IS AVAILABLE ONLY WITH THE PRESENCE OF A CUPBOARD",
-                ["UPGRADE_NO_ESCAPE"] = "CAN'T UPGRADE BUILDINGS DURING RAID BLOCK",
-                ["UPGRADE_NOT_ENOUGHT_RESOURCE"] = "INSUFFICIENT RESOURCES TO UPGRADE",
-                ["UPGRADE_REPAIR_OBJECTS"] = "REPAIR OBJECT BEFORE UPGRADING",
-                ["UPGRADE_TIME_EXECURE"] = "YOU CAN UPGRADE THE OBJECT IN: {0}",
-
-                ["REMOVE_IQTURRET_NO_DELETE_TUMBLER"] = "CAN'T DELETE THIS ITEM",
-                ["REMOVE_NOT_REMOVE_OBJECT"] = "YOU CAN'T DELETE THIS OBJECT",
-                ["REMOVE_NOT_REMOVE_ALIEN_OBJECT"] = "YOU CAN'T DELETE FOREIGN OBJECT",
-                ["REMOVE_NO_ESCAPE"] = "YOU CAN'T REMOVE BUILDINGS DURING RAID BLOCK",
-                ["REMOVE_TIME_EXECUTE"] = "YOU CAN REMOVE THE OBJECT IN: {0}",
-                ["REMOVE_FULL_BLOCK_REMOVE"] = "YOU CAN NO LONGER DELETE THIS OBJECT",
-                ["REMOVE_SINCE_ATTACKED_BLOCK"] = "THE OBJECT WAS RECENTLY ATTACKED - IT WILL BE POSSIBLE TO DELETE IT AFTER {0}",
-
-                ["ALL_OBJECTS_NO_AUTH"] = "YOU MUST BE AUTHORIZED IN THE CABINET TO PERFORM THIS ACTION",
-                ["ALL_OBJECTS_FINDED_OBJECT"] = "AN OBJECT WAS DISCOVERED IN SOME BUILDINGS",
-
-                ["NO_PERMISSION"] = "INSUFFICIENT PERMISSIONS FOR THIS ACTION",
-
-                ["FORMAT_TIME_DAY"] = "D",
-                ["FORMAT_TIME_HOURSE"] = "H",
-                ["FORMAT_TIME_MINUTES"] = "M",
-                ["FORMAT_TIME_SECONDS"] = "S",
-            }, this);
-
-            lang.RegisterMessages(new Dictionary<String, String>
-            {
-                ["UPGRADE_UP_USE_INSTRUCTION"] = "ЧТОБЫ УЛУЧШИТЬ СТРОЕНИЕ - УДАРЬТЕ ПО НЕМУ МОЛОТКОМ",
-                ["UPGRADE_REMOVE_USE_INSTRUCTION"] = "ЧТОБЫ УДАЛИТЬ СТРОЕНИЕ - УДАРЬТЕ ПО НЕМУ МОЛОТКОМ",
-                ["UPGRADE_FOREIGN_OBJECT"] = "В ОБЪЕКТЕ НАХОДИТСЯ ПРЕДМЕТ",
-                ["UPGRADE_SINCE_ATTACKED_BLOCK"] = "ОБЪЕКТ НЕДАВНО АТАКОВАН - УЛУЧШИТЬ МОЖНО БУДЕТ ЧЕРЕЗ {0}",
-                ["UPGRADE_NO_AUTH_BUILDING"] = "НЕЛЬЗЯ УЛУЧШАТЬ ПОСТРОЙКИ НА ЧУЖОЙ ТЕРРИТОРИИ",
-                ["UPGRADE_NO_AUTH_BUILDING_CUPBOARD"] = "УЛУЧШЕНИЕ ДОСТУПНО ТОЛЬКО С НАЛИЧИЕМ ШКАФА",
-                ["UPGRADE_NO_ESCAPE"] = "ВЫ НЕ МОЖЕТЕ УЛУЧШАТЬ ПОСТРОЙКИ ВО ВРЕМЯ РЕЙДБЛОКА",
-                ["UPGRADE_NOT_ENOUGHT_RESOURCE"] = "НЕДОСТАТОЧНО РЕСУРСОВ ДЛЯ УЛУЧШЕНИЯ",
-                ["UPGRADE_REPAIR_OBJECTS"] = "ПОЧИНИТЕ ОБЪЕКТ ПЕРЕД УЛУЧШЕНИЕМ",
-                ["UPGRADE_TIME_EXECURE"] = "ВЫ СМОЖЕТЕ УЛУЧШИТЬ ОБЪЕКТ ЧЕРЕЗ : {0}",
-
-                ["REMOVE_IQTURRET_NO_DELETE_TUMBLER"] = "НЕЛЬЗЯ УДАЛИТЬ ЭТОТ ПРЕДМЕТ",
-                ["REMOVE_NOT_REMOVE_OBJECT"] = "ВЫ НЕ МОЖЕТЕ УДАЛИТЬ ЭТОТ ОБЪЕКТ",
-                ["REMOVE_NOT_REMOVE_ALIEN_OBJECT"] = "ВЫ НЕ МОЖЕТЕ УДАЛИТЬ ЧУЖОЙ ОБЪЕКТ",
-                ["REMOVE_NO_ESCAPE"] = "ВЫ НЕ МОЖЕТЕ УДАЛЯТЬ ПОСТРОЙКИ ВО ВРЕМЯ РЕЙДБЛОКА",
-                ["REMOVE_SINCE_ATTACKED_BLOCK"] = "ОБЪЕКТ НЕДАВНО АТАКОВАН - УДАЛИТЬ МОЖНО БУДЕТ ЧЕРЕЗ {0}",
-                ["REMOVE_TIME_EXECUTE"] = "ВЫ СМОЖЕТЕ УДАЛИТЬ ОБЪЕКТ ЧЕРЕЗ : {0}",
-                ["REMOVE_FULL_BLOCK_REMOVE"] = "ВЫ БОЛЬШЕ НЕ МОЖЕТЕ УДАЛИТЬ ЭТОТ ОБЪЕКТ",
-
-                ["ALL_OBJECTS_NO_AUTH"] = "ВЫ ДОЛЖНЫ БЫТЬ АВТОРИЗИРОВАНЫ В ШКАФУ ДЛЯ ЭТОГО ДЕЙСТВИЯ",
-                ["ALL_OBJECTS_FINDED_OBJECT"] = "В НЕКОТОРЫХ СТРОЕНИЯХ БЫЛ ОБНАРУЖЕН ОБЪЕКТ",
-                
-                ["NO_PERMISSION"] = "НЕДОСТАТОЧНО ПРАВ ДЛЯ ЭТОГО ДЕЙСТВИЯ",
-                
-                ["FORMAT_TIME_DAY"] = "Д",
-                ["FORMAT_TIME_HOURSE"] = "Ч",
-                ["FORMAT_TIME_MINUTES"] = "М",
-                ["FORMAT_TIME_SECONDS"] = "С",
-            }, this, "ru");
-            
-            PrintWarning(LanguageEn ? "The language file has been successfully uploaded" : "Языковой файл загружен успешно");
+                sb.AppendFormat(lang.GetMessage(LangKey, this, userID), args);
+                return sb.ToString();
+            }
+            return lang.GetMessage(LangKey, this, userID);
         }
         #endregion
-        
-        #region API
 
-        Int32 API_GET_GRADE_LEVEL_PLAYER(BasePlayer player)
+        #region Lang
+
+        private new void LoadDefaultMessages()
         {
-            if (player == null)
-                return 0;
+            lang.RegisterMessages(new Dictionary<string, string>
+            {
+                ["TITLE_GR_ADMIN"] = "<b><size=12>CHOOSE AVAILABLE MODE</size></b>",
+                ["TITLE_TAKE_UP"] = "<b><size=12>UPGRADE</size></b>",
+                ["TITLE_GR_ADMIN_ALL_OBJ"] = "<b><size=12>ВСЕ ПРИВЯЗАННЫЕ ОБЪЕКТЫ</size></b>",
+                ["TITLE_TAKE_REMOVE"] = "<b><size=12>REMOVE</size></b>",
+                ["GR_REMOVE_ALL_USE"] = "<b><size=10>REMOVE ALL</size></b>",
+                ["GR_UP_ALL_USE"] = "<b><size=10>UP ALL</size></b>",
 
-            if (!LocalRepository.ContainsKey(player))
-                return 0;
+                ["REMOVE_TITLE"] = "<b><size=10>REMOVE ITEMS : {0}</size></b>",
+                ["REMOVE_NO_ESCAPE"] = "<b><size=10>DO NOT REMOVE BUILDINGS DURING THE RAID</size></b>",
+                ["REMOVE_NO_AUTH"] = "<b><size=10>DO NOT REMOVE OTHER BUILDINGS</size></b>",
+                ["REMOVE_ATTACKED_BLOCK"] = "<b><size=11>CAN BE DELETED THROUG {0}</size></b>",
+                ["REMOVE_TIME_EXECUTE"] = "<b><size=10>YOU CAN REMOVE AN OBJECT THROUGH : {0}</size></b>",
+                ["REMOVE_TIME_EXECUTE_UNREMOVE"] = "<b><size=10>YOU CAN'T REMOVE IT MORE</size></b>",
+                ["REMOVE_UNREMOVE"] = "<b><size=12>YOU CAN'T REMOVE</size></b>",
+                ["REMOVE_ALL_UNDO"] = "<b><size=10>UNDO</size></b>",
+                ["REMOVE_ONLY_FRIENDS"] = "<b><size=10>YOU CAN REMOVE FRIENDS ONLY</size></b>",
 
-            return (Int32)LocalRepository[player].selectedType;
+                ["GRADE_TITLE"] = "<b><size=10>UPDATE {0}</size></b>",
+                ["GRADE_NO_ESCAPE"] = "<b><size=10>CANNOT IMPROVE BUILDINGS DURING THE RAID</size></b>",
+                ["GRADE_NO_AUTH"] = "<b><size=10>DO NOT IMPROVE DEVELOPMENTS IN ANOTHER'S TERRITORY</size></b>",
+                ["GRADE_ATTACKED_BLOCK"] = "<b><size=11>YOU CAN IMPROVE THROUGH {0}</size></b>",
+                ["GRADE_NO_RESOURCE"] = "<b><size=11>NOT ENOUGH RESOURCES FOR IMPROVEMENT</size></b>",
+                ["GRADE_NO_THIS_USER"] = "<b><size=11>A PLAYER IS IN THE CONSTRUCTION</size></b>",
+                ["GRADE_ALL_NO_AUTH"] = "<b><size=10>IT IS IMPOSSIBLE TO IMPROVE EVERYTHING WITHOUT A CABINET</size></b>",
+                ["REMOVE_ALL_NO_AUTH"] = "<b><size=10>DO NOT REMOVE ALL WITHOUT CABINET</size></b>",
+
+                ["NO_PERM_GRADE_REMOVE"] = "<b><size=10>YOU HAVE NO RIGHT TO DO THIS</size></b>",
+
+            }, this);
+
+            lang.RegisterMessages(new Dictionary<string, string>
+            {
+                ["TITLE_GR_ADMIN"] = "<b><size=12>ВЫБЕРИТЕ ДОСТУПНЫЙ РЕЖИМ</size></b>",
+                ["TITLE_GR_ADMIN_ALL_OBJ"] = "<b><size=12>ВСЕ ПРИВЯЗАННЫЕ ОБЪЕКТЫ</size></b>",
+                ["TITLE_TAKE_UP"] = "<b><size=12>УЛУЧШЕНИЕ</size></b>",
+                ["TITLE_TAKE_REMOVE"] = "<b><size=12>УДАЛЕНИЕ</size></b>",
+                ["GR_UP_ALL_USE"] = "<b><size=10>УЛУЧШЕНИЯ ВСЕХ ОБЪЕКТОВ</size></b>",
+
+                ["REMOVE_TITLE"] = "<b><size=10>УДАЛЕНИЕ ПОСТРОЕК : {0}</size></b>", 
+                ["REMOVE_NO_ESCAPE"] = "<b><size=10>НЕЛЬЗЯ УДАЛЯТЬ ПОСТРОЙКИ ВО ВРЕМЯ РЕЙДА</size></b>",
+                ["REMOVE_NO_AUTH"] = "<b><size=10>НЕЛЬЗЯ УДАЛЯТЬ ЧУЖИЕ ПОСТРОЙКИ</size></b>",
+                ["REMOVE_ATTACKED_BLOCK"] = "<b><size=11>УДАЛИТЬ МОЖНО БУДЕТ ЧЕРЕЗ {0}</size></b>",
+                ["REMOVE_TIME_EXECUTE"] = "<b><size=10>ВЫ СМОЖЕТЕ УДАЛИТЬ ОБЪЕКТ ЧЕРЕЗ : {0}</size></b>",
+                ["REMOVE_TIME_EXECUTE_UNREMOVE"] = "<b><size=10>ВЫ БОЛЬШЕ НЕ МОЖЕТЕ УДАЛИТЬ ЭТОТ ОБЪЕКТ</size></b>",
+                ["REMOVE_UNREMOVE"] = "<b><size=12>ВЫ НЕ МОЖЕТЕ УДАЛИТЬ ЭТОТ ОБЪЕКТ</size></b>",
+                ["REMOVE_ALL"] = "<b><size=10>ВКЛЮЧЕНО УДАЛЕНИЯ ВСЕХ ОБЪЕКТОВ</size></b>",
+                ["REMOVE_ALL_UNDO"] = "<b><size=10>ВЕРНУТЬ</size></b>",
+                ["REMOVE_ALL_NO_AUTH"] = "<b><size=10>НЕЛЬЗЯ УДАЛИТЬ ВСЕ БЕЗ ШКАФА</size></b>",
+                ["REMOVE_ONLY_FRIENDS"] = "<b><size=10>ВЫ МОЖЕТЕ УДАЛЯТЬ ТОЛЬКО ПОСТРОЙКИ ДРУЗЕЙ</size></b>",
+
+                ["GRADE_TITLE"] = "<b><size=10>УЛУЧШЕНИЕ ДО {0} : {1}</size></b>",
+                ["GRADE_NO_ESCAPE"] = "<b><size=10>НЕЛЬЗЯ УЛУЧШАТЬ ПОСТРОЙКИ ВО ВРЕМЯ РЕЙДА</size></b>",
+                ["GRADE_NO_AUTH"] = "<b><size=10>НЕЛЬЗЯ УЛУЧШАТЬ ПОСТРОЙКИ НА ЧУЖОЙ ТЕРРИТОРИИ</size></b>",
+                ["GRADE_ATTACKED_BLOCK"] = "<b><size=11>УЛУЧШИТЬ МОЖНО БУДЕТ ЧЕРЕЗ {0}</size></b>",
+                ["GRADE_NO_RESOURCE"] = "<b><size=11>НЕДОСТАТОЧНО РЕСУРСОВ ДЛЯ УЛУЧШЕНИЯ</size></b>",
+                ["GRADE_NO_THIS_USER"] = "<b><size=11>В ПОСТРОЙКЕ НАХОДИТСЯ ПРЕДМЕТ</size></b>",
+                ["GRADE_ALL_NO_AUTH"] = "<b><size=10>НЕЛЬЗЯ УЛУЧШИТЬ ВСЕ БЕЗ ШКАФА</size></b>",
+
+                ["NO_PERM_GRADE_REMOVE"] = "<b><size=10>У ВАС НЕТ ПРАВ ДЛЯ ЭТОГО</size></b>",
+
+            }, this, "ru");
+            PrintWarning("Языковой файл загружен успешно");
         }
-        
-        Int32 API_GET_GRADE_TIME_PLAYER(BasePlayer player)
-        {
-            if (player == null)
-                return 0;
-
-            if (!LocalRepository.ContainsKey(player))
-                return 0;
-
-            return LocalRepository[player].selectedType == ActionType.None ? 0 : LocalRepository[player].activityTime - CurrentTime() <= 0 ? 0 : Convert.ToInt32(LocalRepository[player].activityTime - CurrentTime());
-        }
-
-        Boolean API_IS_REPAIR_TO_GRADE() => config.UpgradePresets.RepairToGrade;
-
         #endregion
     }
 }
