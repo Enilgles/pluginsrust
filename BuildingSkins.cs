@@ -10,7 +10,7 @@ using Newtonsoft.Json;
 
 namespace Oxide.Plugins
 {
-    [Info("Building Skins", "Marat", "2.0.9")]
+    [Info("Building Skins", "Marat", "2.0.3")]
     [Description("Automatic application of DLC skins for building blocks")]
     class BuildingSkins : RustPlugin
     {
@@ -19,17 +19,14 @@ namespace Oxide.Plugins
         #region Field
         
         private const string InitialLayer = "UI_BuildingLayer";
-        private const string CupboardLayer = "UI_CupboardLayer";
         
         private const string permissionUse = "buildingskins.use";
         private const string permissionAll = "buildingskins.all";
         private const string permissionBuild = "buildingskins.build";
-        private const string permissionTc = "buildingskins.tc";
         private const string permissionAdmin = "buildingskins.admin";
         
         private readonly Dictionary<ulong, Coroutine> runningCoroutines = new();
         private readonly Dictionary<BuildingGrade.Enum, List<ulong>> gradesSkin = new();
-        private Dictionary<ulong, uint> PlayersLastBlockColourChangeId = new();
         
         private readonly Dictionary<uint, string> colors = new()
         {
@@ -61,7 +58,6 @@ namespace Oxide.Plugins
             permission.RegisterPermission(permissionUse, this);
             permission.RegisterPermission(permissionAll, this);
             permission.RegisterPermission(permissionBuild, this);
-            permission.RegisterPermission(permissionTc, this);
             permission.RegisterPermission(permissionAdmin, this);
             
             foreach (var list in config.BuildingImages)
@@ -94,7 +90,6 @@ namespace Oxide.Plugins
             {
                 var player = BasePlayer.activePlayerList[i];
                 CuiHelper.DestroyUi(player, InitialLayer);
-                CuiHelper.DestroyUi(player, CupboardLayer);
                 StopCoroutine(player);
             }
             SaveData();
@@ -113,7 +108,7 @@ namespace Oxide.Plugins
                 return;
             }
             StartCoroutine(player, PreloadImages(player));
-            if (!storedData.PlayerData.TryGetValue(player.userID.Get(), out var data))
+            if (!storedData.PlayerData.TryGetValue(player.userID, out var data))
             {
                 data = new Data
                 {
@@ -121,7 +116,7 @@ namespace Oxide.Plugins
                 };
                 storedData.PlayerData[player.userID] = data;
             }
-            PlayersLastBlockColourChangeId[player.userID.Get()] = data.RandomColor? 0U : data.Color;
+            player.LastBlockColourChangeId = data.RandomColor ? player.LastBlockColourChangeId : data.Color;
         }
         
         private void OnPlayerDisconnected(BasePlayer player) => StopCoroutine(player);
@@ -129,8 +124,8 @@ namespace Oxide.Plugins
         private void OnPlayerRespawned(BasePlayer player)
         {
             if (player == null || !player.IsConnected) return;
-            var data = storedData.PlayerData.GetValueOrDefault(player.userID);
-            PlayersLastBlockColourChangeId[player.userID.Get()] = data is { RandomColor: true }? 0U : data!.Color;
+            var data = storedData.PlayerData.TryGetValue(player.userID, out var playerData) ? playerData : null;
+            player.LastBlockColourChangeId = data?.RandomColor == false ? data.Color : player.LastBlockColourChangeId;
         }
         
         private void OnHammerHit(BasePlayer player, HitInfo info)
@@ -141,8 +136,8 @@ namespace Oxide.Plugins
             if (block == null || !gradesSkin.TryGetValue(block.grade, out var skinId) || skinId == null) return;
             var skinID = GetPlayerSkinID(player, block.grade);
             var playerData = storedData.PlayerData[player.userID];
-            if (block.SecondsSinceAttacked <= 30f) return;
-            if (block.skinID != 0 && block.grade.ToString() == "Metal" && !playerData.RandomColor) block.SetCustomColour(PlayersLastBlockColourChangeId[player.userID.Get()]);
+            //if (skinID == 10226 && block.grade.ToString() == "Wood" && block.prefabID == 870964632) return;
+            if (block.skinID != 0 && block.grade.ToString() == "Metal" && !playerData.RandomColor) block.SetCustomColour(player.LastBlockColourChangeId);
             if (block.skinID == skinID) return;
             if ((config.BuildingBlocked && !player.CanBuild() || block.OwnerID != player.userID) && !permission.UserHasPermission(player.UserIDString, permissionAdmin)) return;
             if (!playerData.ChangeHammer || block.health != block.MaxHealth() && !playerData.NeedsRepair) return;
@@ -159,12 +154,8 @@ namespace Oxide.Plugins
             if (!gradesSkin.TryGetValue(grade, out var skinId) || skinId == null) return null;
             var skinID = GetPlayerSkinID(player, grade);
             var playerData = storedData.PlayerData[player.userID];
-            if (block.SecondsSinceAttacked <= 30f)
-            {
-                block.OnRepairFailed(player, string.Format("Unable to repair: Recently damaged. Repairable in: {0:N0}s.", 30f - block.SecondsSinceAttacked));
-                return false;
-            }
-            if (block.skinID != 0 && grade.ToString() == "Metal" && !playerData.RandomColor) block.SetCustomColour(PlayersLastBlockColourChangeId[player.userID.Get()]);
+            //if (skinID == 10226 && grade.ToString() == "Wood" && block.prefabID == 870964632) return null;
+            if (block.skinID != 0 && grade.ToString() == "Metal" && !playerData.RandomColor) block.SetCustomColour(player.LastBlockColourChangeId);
             if (block.skinID == skinID && block.grade == grade) return false;
             NextTick(() =>
             {
@@ -173,7 +164,7 @@ namespace Oxide.Plugins
                 block.ChangeGradeAndSkin(block.grade, skinID, true, true);
                 if (playerData.EnableAnimation) block.ClientRPC(null, "DoUpgradeEffect", (int)block.grade, skinID);
                 ///for plugin BuildingGrades
-                if (block.skinID != 0 && grade.ToString() == "Metal" && !playerData.RandomColor) block.SetCustomColour(PlayersLastBlockColourChangeId[player.userID.Get()]);
+                if (block.skinID != 0 && grade.ToString() == "Metal" && !playerData.RandomColor) block.SetCustomColour(player.LastBlockColourChangeId);
             });
             return null;
         }
@@ -182,24 +173,6 @@ namespace Oxide.Plugins
         private void OnStructureGradeUpdated(BuildingBlock block, BasePlayer player, BuildingGrade.Enum oldGrade, BuildingGrade.Enum newGrade)
         {
             OnStructureUpgrade(block, player, newGrade, block.skinID);
-        }
-        
-        private void OnLootEntity(BasePlayer player, BaseEntity entity)
-        {
-            if (player == null || entity == null) return;
-            var cupboard = entity.gameObject.GetComponent<BuildingPrivlidge>();
-            if (cupboard == null || !permission.UserHasPermission(player.UserIDString, permissionTc)) return;
-            if (config.ChangeSkinTC && cupboard.OwnerID != player.userID) return;
-            TCupboardLayer(player);
-        }
-
-        private void OnLootEntityEnd(BasePlayer player, BaseCombatEntity entity)
-        {
-            if (player == null || entity == null) return;
-            if (entity is BuildingPrivlidge)
-            {
-                CuiHelper.DestroyUi(player, CupboardLayer);
-            }
         }
         
         #endregion
@@ -212,7 +185,6 @@ namespace Oxide.Plugins
         {
             [JsonProperty("Building skin change commands")] public string[] Commands;
             [JsonProperty("Block building skin in building blocked")] public bool BuildingBlocked;
-            [JsonProperty("Changing skin from tool cupboard only by owner")] public bool ChangeSkinTC;
             [JsonProperty("Number of blocks updated per tick")] public int UpdatesPerTick;
             [JsonProperty("Use separate permissions for skins")] public bool SeparatePermissions;
             [JsonProperty("Image and description settings")] public Dictionary<int, List<BlockInfo>> BuildingImages;
@@ -225,7 +197,6 @@ namespace Oxide.Plugins
             {
                 Commands = new string[] {"bskin", "building.skin"},
                 BuildingBlocked = true,
-                ChangeSkinTC = true,
                 UpdatesPerTick = 5,
                 SeparatePermissions = false,
                 BuildingImages = new Dictionary<int, List<BlockInfo>>
@@ -293,10 +264,6 @@ namespace Oxide.Plugins
                             config.BuildingImages[0][3].SkinId = 3;
                         }
                     }
-                    if (config.Version < new Core.VersionNumber(2, 0, 4))
-                    {
-                        config.ChangeSkinTC = true;
-                    }
                     config.Version = Version;
                     PrintWarning("Config update completed!");
                 }
@@ -324,21 +291,6 @@ namespace Oxide.Plugins
             int index, skinIndex;
             switch (arg.Args[0].ToLower())
             {
-                case "open":
-                {
-                    InitializeLayers(player, true);
-                    break;
-                }
-                case "build":
-                {
-                    var blocks = player.GetBuildingPrivilege().GetBuilding()?.buildingBlocks.ToArray();
-                    if (blocks == null) return;
-                    PrintToChat(player, GetMessage("Lang_UpdateBuilding", player));
-                    StartCoroutine(player, UpgradeSkin(player, blocks));
-                    TCupboardLayer(player);
-                    SoundEffect(player, "assets/prefabs/deployable/repair bench/effects/skinchange_spraypaint.prefab");
-                    break;
-                }
                 case "change":
                 {
                     if (!int.TryParse(arg.Args[1], out index) || !int.TryParse(arg.Args[2], out skinIndex)) return;
@@ -368,7 +320,7 @@ namespace Oxide.Plugins
                 case "setcolor":
                 {
                     if (!int.TryParse(arg.Args[1], out index) || !uint.TryParse(arg.Args[2], out uint colorId)) return;
-                    PlayersLastBlockColourChangeId[player.userID.Get()] = colorId;
+                    player.LastBlockColourChangeId = colorId;
                     playerData.Color = colorId;
                     ColorLayer(player, index);
                     SoundEffect(player, "assets/prefabs/deployable/repair bench/effects/skinchange_spraypaint.prefab");
@@ -379,7 +331,7 @@ namespace Oxide.Plugins
                     if (!int.TryParse(arg.Args[1], out index)) return;
                     var randomColor = !playerData.RandomColor;
                     playerData.RandomColor = randomColor;
-                    PlayersLastBlockColourChangeId[player.userID.Get()] = randomColor ? 0U : playerData.Color;
+                    player.LastBlockColourChangeId = randomColor ? 0U : playerData.Color;
                     ColorLayer(player, index);
                     break;
                 }
@@ -469,7 +421,7 @@ namespace Oxide.Plugins
                         PrintToChat(player, GetMessage("Lang_NotFoundPlayer", player));
                         return;
                     }
-                    var targetOwner = arg.Length > 1 ? ulong.Parse(arg[1]) : player.userID.Get();
+                    var targetOwner = arg.Length > 1 ? ulong.Parse(arg[1]) : player.userID;
                     if (!permission.UserHasPermission(player.UserIDString, permissionAdmin) && targetOwner != player.userID)
                     {
                         PrintToChat(player, GetMessage("Lang_NoPermissions", player));
@@ -481,7 +433,7 @@ namespace Oxide.Plugins
                         PrintToChat(player, GetMessage("Lang_NotFoundBlocks", player));
                         return;
                     }
-                    PrintToChat(player, GetMessage(targetOwner != player.userID.Get() ? "Lang_UpdateAllTarget" : "Lang_UpdateAll", player));
+                    PrintToChat(player, GetMessage(targetOwner != player.userID ? "Lang_UpdateAllTarget" : "Lang_UpdateAll", player));
                     StartCoroutine(player, UpgradeSkin(player, blockOwner));
                     break;
                 }
@@ -494,24 +446,17 @@ namespace Oxide.Plugins
         
         private void StartCoroutine(BasePlayer player, IEnumerator routine)
         {
-            if (runningCoroutines.ContainsKey(player.userID.Get())) return;
+            if (runningCoroutines.ContainsKey(player.userID)) return;
             var coroutine = ServerMgr.Instance?.StartCoroutine(routine);
-            if (coroutine != null) runningCoroutines[player.userID.Get()] = coroutine;
+            if (coroutine != null) runningCoroutines[player.userID] = coroutine;
         }
         
         private void StopCoroutine(BasePlayer player)
         {
-            if (!runningCoroutines.ContainsKey(player.userID.Get())) return;
-            var coroutine = runningCoroutines[player.userID.Get()];
+            if (!runningCoroutines.ContainsKey(player.userID)) return;
+            var coroutine = runningCoroutines[player.userID];
             if (coroutine != null) ServerMgr.Instance?.StopCoroutine(coroutine);
-            runningCoroutines.Remove(player.userID.Get());
-            var entity = player?.inventory?.loot?.entitySource;
-            if (entity == null || !permission.UserHasPermission(player.UserIDString, permissionTc)) return;
-            if (entity is BuildingPrivlidge)
-            {
-                if (config.ChangeSkinTC && entity.OwnerID != player.userID.Get()) return;
-                TCupboardLayer(player);
-            }
+            runningCoroutines.Remove(player.userID);
         }
         
         private IEnumerator UpgradeSkin(BasePlayer player, BuildingBlock[] blocks)
@@ -523,10 +468,10 @@ namespace Oxide.Plugins
                 if (block == null || block.IsDestroyed) continue;
                 if (!gradesSkin.TryGetValue(block.grade, out var skinId) || skinId == null) continue;
                 var skinID = GetPlayerSkinID(player, block.grade);
-                var playerData = storedData.PlayerData[player.userID.Get()];
+                var playerData = storedData.PlayerData[player.userID];
                 if (skinID != 0 && player.blueprints.steamInventory.HasItem((int)skinID)) continue;
-                if (block.SecondsSinceAttacked < 30f) continue;
-                if (block.skinID != 0 && block.grade.ToString() == "Metal" && !playerData.RandomColor) block.SetCustomColour(PlayersLastBlockColourChangeId[player.userID.Get()]);
+                //if (skinID == 10226 && block.grade.ToString() == "Wood" && block.prefabID == 870964632) continue;
+                if (block.skinID != 0 && block.grade.ToString() == "Metal" && !playerData.RandomColor) block.SetCustomColour(player.LastBlockColourChangeId);
                 if (block.skinID == skinID) continue;
                 block.skinID = skinID;
                 block.ChangeGradeAndSkin(block.grade, skinID, true, true);
@@ -556,7 +501,7 @@ namespace Oxide.Plugins
         
         private ulong GetPlayerSkinID(BasePlayer player, BuildingGrade.Enum grade)
         {
-            var playerData = storedData.PlayerData.TryGetValue(player.userID.Get(), out var data) ? data : null;
+            var playerData = storedData.PlayerData.TryGetValue(player.userID, out var data) ? data : null;
             return (ulong)(playerData?.GetType().GetField(grade.ToString()).GetValue(playerData) ?? 0);
         }
         
@@ -646,7 +591,7 @@ namespace Oxide.Plugins
         
         private void ImageLayers(BasePlayer player, int index, int skinIndex)
         {
-            var playerData = storedData.PlayerData[player.userID.Get()];
+            var playerData = storedData.PlayerData[player.userID];
             var listIndex = config.BuildingImages[index];
             var nextIndex = (skinIndex + 1) % listIndex.Count;
             var grades = gradesSkin.ElementAt(index);
@@ -708,7 +653,7 @@ namespace Oxide.Plugins
             {
                 if (skinIndex != 0)
                 {
-                    var colorIcon = colors.TryGetValue(PlayersLastBlockColourChangeId[player.userID.Get()], out var value) ? value : "0.20 0.30 0.40 1.0";
+                    var colorIcon = colors.TryGetValue(player.LastBlockColourChangeId, out var value) ? value : "0.20 0.30 0.40 1.0";
                     
                     container.Add(new CuiButton()
                     {
@@ -787,7 +732,7 @@ namespace Oxide.Plugins
             
             string[] langKeys = {"Lang_ChangeHammer", "Lang_NeedsRepair", "Lang_EnableAnimation"};
             string[] commands = {"UI_BuildingController hammer", "UI_BuildingController repair", "UI_BuildingController animation"};
-            var playerData = storedData.PlayerData[player.userID.Get()];
+            var playerData = storedData.PlayerData[player.userID];
             var margin = 0;
             
             for (var i = 0; i < 3; i++)
@@ -828,8 +773,8 @@ namespace Oxide.Plugins
         
         private void ColorLayer(BasePlayer player, int index)
         {
-            var playerData = storedData.PlayerData[player.userID.Get()];
-            var playerColor = PlayersLastBlockColourChangeId[player.userID.Get()];
+            var playerData = storedData.PlayerData[player.userID];
+            var playerColor = player.LastBlockColourChangeId;
             CuiElementContainer container = new CuiElementContainer();
             
             container.Add(new CuiElement()
@@ -921,52 +866,6 @@ namespace Oxide.Plugins
             CuiHelper.AddUi(player, container);
         }
         
-        private void TCupboardLayer(BasePlayer player)
-        {
-            var isRunning = runningCoroutines.ContainsKey(player.userID.Get());
-            CuiElementContainer container = new CuiElementContainer();
-            
-            container.Add(new CuiElement()
-            {
-                Parent = "Overlay",
-                Name = CupboardLayer,
-                DestroyUi = CupboardLayer,
-                Components =
-                {
-                    new CuiRectTransformComponent { AnchorMin = "0.5 0.0", AnchorMax = "0.5 0.0", OffsetMin = "400 595", OffsetMax = "572 616" },
-                    new CuiImageComponent { Color = isRunning ? "0.90 0.53 0.05 1.0" : "0.40 0.50 0.20 1.0", Material = "assets/content/ui/uibackgroundblur.mat" }
-                }
-            });
-            
-            var text = GetMessage(isRunning ? "Lang_TcWait" : "Lang_TcChangeSkin", player);
-            var color = isRunning ? "1 1 1 1" : "0.70 0.90 0.45 1.0";
-            var sprite = isRunning ? "assets/icons/refresh.png" : "assets/icons/brush.png";
-
-            container.Add(new CuiButton
-            {
-                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "22 0", OffsetMax = "0 0" },
-                Button = { Command = !isRunning ? "UI_BuildingController build" : "", Color = "0 0 0 0" },
-                Text = { Text = text.ToUpper(), Color = color, FontSize = 11, Align = TextAnchor.MiddleCenter }
-            }, CupboardLayer, CupboardLayer + ".Button");
-            
-            container.Add(new CuiPanel()
-            {
-                RectTransform = { AnchorMin = "0 0", AnchorMax = "0 1", OffsetMin = "4 2", OffsetMax = "22 -2" },
-                Image = { Color = "1 1 1 1", Sprite = sprite }
-            }, CupboardLayer);
-
-            if (!isRunning)
-            {
-                container.Add(new CuiButton()
-                {
-                    RectTransform = { AnchorMin = "1 1", AnchorMax = "1 1", OffsetMin = "5 -20", OffsetMax = "25 0" },
-                    Button = { Command = $"UI_BuildingController open", Color = "0.31 0.64 0.89 0.5", Sprite = "assets/icons/gear.png" }
-                }, CupboardLayer);
-            }
-            
-            CuiHelper.AddUi(player, container);
-        }
-        
         private IEnumerator PreloadImages(BasePlayer player)
         {
             if (player == null || !player.IsConnected) yield break;
@@ -1029,8 +928,6 @@ namespace Oxide.Plugins
                 ["Lang_Randomcolor"] = "Use random color",
                 ["Lang_SettingEnable"] = "On",
                 ["Lang_SettingDisable"] = "Off",
-                ["Lang_TcChangeSkin"] = "Change building skin",
-                ["Lang_TcWait"] = "Wait...",
                 ["Wood"] = "Wood skin",
                 ["Stone"] = "Stone skin",
                 ["Metal"] = "Metal skin",
@@ -1070,8 +967,6 @@ namespace Oxide.Plugins
                 ["Lang_Randomcolor"] = "Случайный цвет",
                 ["Lang_SettingEnable"] = "Вкл",
                 ["Lang_SettingDisable"] = "Выкл",
-                ["Lang_TcChangeSkin"] = "Изменить скин постройки",
-                ["Lang_TcWait"] = "Ожидайте...",
                 ["Wood"] = "Деревянный скин",
                 ["Stone"] = "Каменный скин",
                 ["Metal"] = "Металлический скин",
@@ -1124,14 +1019,6 @@ namespace Oxide.Plugins
             {
                 storedData = new StoredData();
                 SaveData();
-            }
-            
-            foreach (var playerData in storedData.PlayerData.Values)
-            {
-                playerData.Wood = config.BuildingImages[0].Any(b => b.SkinId == playerData.Wood) ? playerData.Wood : 0;
-                playerData.Stone = config.BuildingImages[1].Any(b => b.SkinId == playerData.Stone) ? playerData.Stone : 0;
-                playerData.Metal = config.BuildingImages[2].Any(b => b.SkinId == playerData.Metal) ? playerData.Metal : 0;
-                playerData.TopTier = config.BuildingImages[3].Any(b => b.SkinId == playerData.TopTier) ? playerData.TopTier : 0;
             }
         }
         
