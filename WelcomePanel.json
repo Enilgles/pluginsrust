@@ -1,0 +1,433 @@
+{
+  "Main Settings": {
+    "Open when player joins": true,
+    "Open once per wipe": false,
+    "Open at tab": 1,
+    "Block movement when browsing panel": true,
+    "Enable text tags": true,
+    "Server Title": "<size=13>YOURSERVER.NET | 2x LOOT | WEEKLY WIPES | ACTIVE ADMINS | KITS</size>",
+    "Server Logo": "https://rustplugins.net/products/welcomepanellite/2/rustlogo.png",
+    "Selected button color": "0.757 0.259 0.161 1.00",
+    "Base Command": "info",
+    "Additional Commands": {
+      "rules": 2,
+      "help": 3
+    }
+  },
+  "Text Tabs": [
+    {
+      "Name": "             <size=13>Home</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/home_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "0.5",
+      "Font": "robotocondensed-bold.ttf",
+      "Text Background Image": "",
+      "Text Alignment": 3,
+      "Text Lines": [
+        [
+          "<size=45><color=#c14229>RUSTSERVERNAME</color> #4 </size> ",
+          "<size=25>WIPE SCHEDULE <color=#c142299f>WEEKLY</color> @ <color=#c142299f>4:00PM</color> (CET)</size>",
+          "<size=25>RATES <color=#c142299f>2x GATHER</color> | <color=#c142299f>1.5x LOOT</color></size> ",
+          "<size=25>GROUP LIMIT <color=#c142299f>MAX 5</color></size>",
+          "<size=25>MAPSIZE <color=#c142299f>3500</color></size> ",
+          "\n",
+          "\n",
+          "<size=15>Server is located in EU. Blueprints are wiped monthly. Feel free to browse our infomation panel to find out more about the server. If you have more questions, please join our discord and we will happy to help you.</size>",
+          "\n",
+          "<size=15>\n This is demo page for Welcome Panel, you can find more examples by checking other tabs.</size>"
+        ]
+      ],
+      "Addon (plugin name)": ""
+    },
+    {
+      "Name": "             <size=13>Rules</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/rules_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "0.5",
+      "Font": "robotocondensed-regular.ttf",
+      "Text Background Image": "",
+      "Text Alignment": 4,
+      "Text Lines": [
+        [
+          "<size=45><color=#c14229>Text Alignment</color></size>",
+          "",
+          "<size=18>You can set various text alignments inside config file.</size>",
+          "<size=18>There is 9 available settings, each one is defined by number (0 to 8)</size>",
+          "",
+          "<size=17>UpperLeft - <color=#c14229>0</color></size>\n<size=17>UpperCenter - <color=#c14229>1</color></size>\n<size=17>UpperRight - <color=#c14229>2</color></size>",
+          "<size=17>MiddleLeft - <color=#c14229>3</color></size>\n<size=17>MiddleCenter - <color=#c14229>4</color></size>\n<size=17>MiddleRight - <color=#c14229>5</color></size>",
+          "<size=17>LowerLeft - <color=#c14229>6</color></size>\n<size=17>LowerCenter - <color=#c14229>7</color></size>\n<size=17>LowerRight - <color=#c14229>8</color></size>",
+          "",
+          ""
+        ]
+      ],
+      "Addon (plugin name)": ""
+    },
+    {
+      "Name": "             <size=13>Wipe Cycle</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/wipe_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "0.5",
+      "Font": "robotocondensed-regular.ttf",
+      "Text Background Image": "https://rustplugins.net/products/welcomepanellite/1/richtext.png",
+      "Text Alignment": 3,
+      "Text Lines": [
+        [
+          "<size=45><color=#c14229><b>Text Style</b></color></size>",
+          "Text in Rust plugins can be styled with standard rich text tags, it's similar to HTML. Every tag must be closed at the end of text line, otherwise none of the tags will work and they will be shown as regular text. If you ever encounter this issue, please do not reach out to support for help and double check your text lines instead.",
+          "",
+          "  Available Tags",
+          "\n\n\n\n\n\n\n\n\n",
+          "  Available Fonts <size=9>(fonts are applied to whole page)</size>\n",
+          "    <b>robotocondensed-bold.ttf</b>",
+          "    <b>robotocondensed-regular.ttf</b>",
+          "    <b>permanentmarker.ttf</b>",
+          "    <b>droidsansmono.ttf</b>"
+        ]
+      ],
+      "Addon (plugin name)": ""
+    },
+    {
+      "Name": "             <size=13>Links</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/steam_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "0.5",
+      "Font": "robotocondensed-regular.ttf",
+      "Text Background Image": "https://rustplugins.net/products/welcomepanellite/1/enableaddons.png",
+      "Text Alignment": 0,
+      "Text Lines": [
+        [
+          "<size=45><color=#c14229><b>How to enable addons</b></color></size>",
+          "Each tab has addon option right under text line. Simply put addon name in there.",
+          "You can find list of addon names in plugin description."
+        ]
+      ],
+      "Addon (plugin name)": ""
+    },
+    {
+      "Name": "             <size=13>Kits</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/kits_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "0.5",
+      "Font": "robotocondensed-regular.ttf",
+      "Text Background Image": "",
+      "Text Alignment": 3,
+      "Text Lines": [
+        [
+          "This text won't be displayed because",
+          "addon is assigned to this tab."
+        ]
+      ],
+      "Addon (plugin name)": "kits"
+    },
+    {
+      "Name": "             <size=13>Shop</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/shop_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "0.5",
+      "Font": "robotocondensed-regular.ttf",
+      "Text Background Image": "https://rustplugins.net/products/welcomepanellite/1/multiplepages.png",
+      "Text Alignment": 0,
+      "Text Lines": [
+        [
+          "<size=45><color=#c14229><b>How to add multiple pages</b></color></size>",
+          "You can add unlimited amount of pages, check image bellow or config file for example."
+        ],
+        [
+          "<size=45><color=#c14229><b>This is page number 2</b></color></size>",
+          "You can add unlimited amount of pages, check image bellow or config file for example."
+        ],
+        [
+          "<size=45><color=#c14229><b>This is page number 3</b></color></size>",
+          "You can add unlimited amount of pages, check image bellow or config file for example."
+        ]
+      ],
+      "Addon (plugin name)": ""
+    },
+    {
+      "Name": "             <size=13>Vip Ranks</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/vip_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "1",
+      "Font": "robotocondensed-regular.ttf",
+      "Text Background Image": "",
+      "Text Alignment": 4,
+      "Text Lines": [
+        [
+          "<size=25>discord.gg/<color=#c14229><b><size=22>RUSTPLUGINS</size></b></color></size>",
+          "Become verified customer and get faster support.",
+          "\n\n\n",
+          "Full documentation at <b>docs.rustplugins.net/welcomepanellite</b>"
+        ]
+      ],
+      "Addon (plugin name)": ""
+    },
+    {
+      "Name": "             <size=13>Rewards</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/reward_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "1",
+      "Font": "robotocondensed-regular.ttf",
+      "Text Background Image": "",
+      "Text Alignment": 4,
+      "Text Lines": [
+        [
+          "<size=25>discord.gg/<color=#c14229><b><size=22>RUSTPLUGINS</size></b></color></size>",
+          "Become verified customer and get faster support.",
+          "\n\n\n",
+          "Full documentation at <b>docs.rustplugins.net/welcomepanellite</b>"
+        ]
+      ],
+      "Addon (plugin name)": ""
+    },
+    {
+      "Name": "             <size=13>Commands</size>",
+      "Icon": "https://rustplugins.net/products/welcomepanellite/2/rules_button.png",
+      "Font Size": 12,
+      "Font Color": "1 1 1 1",
+      "Font Outline Color": "0 0 0 1",
+      "Font Outline Thickness": "1",
+      "Font": "robotocondensed-regular.ttf",
+      "Text Background Image": "",
+      "Text Alignment": 4,
+      "Text Lines": [
+        [
+          "<size=25>discord.gg/<color=#c14229><b><size=22>RUSTPLUGINS</size></b></color></size>",
+          "\n\n\n",
+          "Full documentation at <b>docs.rustplugins.net/welcomepanel</b>"
+        ]
+      ],
+      "Addon (plugin name)": ""
+    }
+  ],
+  "Base Ui Elements": {
+    "background": {
+      "Color": "0 0 0 0.8",
+      "Material": "assets/content/ui/uibackgroundblur.mat",
+      "Image": "",
+      "Anchor Min": "0 0",
+      "Anchor Max": "1 1",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.2,
+      "Text (not for panels)": null,
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": null
+    },
+    "offset_container": {
+      "Color": "0 0 0 0",
+      "Material": "assets/icons/iconmaterial.mat",
+      "Image": "",
+      "Anchor Min": "0.5 0.5",
+      "Anchor Max": "0.5 0.5",
+      "Offset Min": "-680 -360",
+      "Offset Max": "680 360",
+      "Fade": 0.2,
+      "Text (not for panels)": null,
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": null
+    },
+    "main": {
+      "Color": "0 0 0 0",
+      "Material": "assets/icons/iconmaterial.mat",
+      "Image": "https://rustplugins.net/products/welcomepanellite/2/main.png",
+      "Anchor Min": "0.32 0.175",
+      "Anchor Max": "0.80 0.77",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.2,
+      "Text (not for panels)": null,
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": null
+    },
+    "side": {
+      "Color": "0 0 0 0",
+      "Material": "assets/icons/iconmaterial.mat",
+      "Image": "https://rustplugins.net/products/welcomepanellite/2/side.png",
+      "Anchor Min": "0.185 0.175",
+      "Anchor Max": "0.32 0.77",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.2,
+      "Text (not for panels)": null,
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": null
+    },
+    "content": {
+      "Color": "0 0 0 0.0",
+      "Material": "assets/icons/iconmaterial.mat",
+      "Image": "https://rustplugins.net/products/welcomepanellite/2/s-green.png",
+      "Anchor Min": "0.32 0.178",
+      "Anchor Max": "0.798 0.72",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.0,
+      "Text (not for panels)": null,
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": null
+    },
+    "title": {
+      "Color": "0 0 0 0",
+      "Material": "assets/icons/iconmaterial.mat",
+      "Image": "",
+      "Anchor Min": "0.212 0.725",
+      "Anchor Max": "0.9 0.76",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.2,
+      "Text (not for panels)": null,
+      "Text Alignment (not for panels)": 3,
+      "Text Font (not for panels)": "robotocondensed-bold.ttf"
+    },
+    "logo": {
+      "Color": "0 0 0 0",
+      "Material": "assets/icons/iconmaterial.mat",
+      "Image": null,
+      "Anchor Min": "0.191 0.728",
+      "Anchor Max": "0.206 0.755",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.2,
+      "Text (not for panels)": null,
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": null
+    },
+    "close_button": {
+      "Color": "0.757 0.259 0.161 1.00",
+      "Material": "assets/content/ui/uibackgroundblur-ingamemenu.mat",
+      "Image": "",
+      "Anchor Min": "0.73 0.125",
+      "Anchor Max": "0.80 0.16",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.2,
+      "Text (not for panels)": "✘ CLOSE",
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": "robotocondensed-bold.ttf"
+    },
+    "next_button": {
+      "Color": "0 0 0 0.4",
+      "Material": "assets/icons/iconmaterial.mat",
+      "Image": "https://rustplugins.net/products/welcomepanellite/1/next.png",
+      "Anchor Min": "0.97 0.005",
+      "Anchor Max": "1 0.053",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.0,
+      "Text (not for panels)": "",
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": "robotocondensed-bold.ttf"
+    },
+    "back_button": {
+      "Color": "0 0 0 0.4",
+      "Material": "assets/icons/iconmaterial.mat",
+      "Image": "https://rustplugins.net/products/welcomepanellite/1/back.png",
+      "Anchor Min": "0.935 0.005",
+      "Anchor Max": "0.965 0.053",
+      "Offset Min": "0 0",
+      "Offset Max": "0 0",
+      "Fade": 0.0,
+      "Text (not for panels)": "",
+      "Text Alignment (not for panels)": 4,
+      "Text Font (not for panels)": "robotocondensed-bold.ttf"
+    }
+  },
+  "Tab Buttons": [
+    {
+      "Color": "0 0 0 0.25",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.664",
+      "Anchor Max": "0.3135 0.714",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.45",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.614",
+      "Anchor Max": "0.3135 0.664",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.25",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.564",
+      "Anchor Max": "0.3135 0.614",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.45",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.514",
+      "Anchor Max": "0.3135 0.564",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.25",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.464",
+      "Anchor Max": "0.3135 0.514",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.45",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.414",
+      "Anchor Max": "0.3135 0.464",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.25",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.364",
+      "Anchor Max": "0.3135 0.414",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.45",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.314",
+      "Anchor Max": "0.3135 0.364",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.25",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.264",
+      "Anchor Max": "0.3135 0.314",
+      "Material": "assets/icons/iconmaterial.mat"
+    },
+    {
+      "Color": "0 0 0 0.45",
+      "Text Alignment": 3,
+      "Text Font": "robotocondensed-bold.ttf",
+      "Anchor Min": "0.1855 0.214",
+      "Anchor Max": "0.3135 0.264",
+      "Material": "assets/icons/iconmaterial.mat"
+    }
+  ]
+}
