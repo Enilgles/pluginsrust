@@ -1,94 +1,185 @@
-using System.Collections.Generic;
+﻿using System;
 using System.Linq;
-using Oxide.Game.Rust.Cui;
+using System.Globalization;
+using System.Collections.Generic;
 using Oxide.Core.Plugins;
-using UnityEngine;
+using Oxide.Game.Rust.Cui;
 using Newtonsoft.Json;
+using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("CraftSystem", "rustmods.ru", "2.0.0")]
-    [Description("Ui craft system")]
+    [Info("CraftSystem", "Chibubrik", "1.2.0")]
     class CraftSystem : RustPlugin
     {
         #region Вар
         string Layer = "Craft_UI";
+        string LayerCraftInfo = "CraftInfo_UI";
 
         [PluginReference] Plugin ImageLibrary;
         #endregion
 
         #region Класс
-        public class Settings
+        public class CraftSettings
         {
-            [JsonProperty("Название предмета")] public string DisplayName;
-            [JsonProperty("Описание предмета")] public string Description;
-            [JsonProperty("Верстак для крафта предмета")] public int Workbench;
+            [JsonProperty("Включить крафт этого предмета?")] public bool Enable;
+            [JsonProperty("Название")] public string Name;
+            [JsonProperty("Ссылка на префаб")] public string Prefab;
             [JsonProperty("Короткое название предмета")] public string ShortName;
-            [JsonProperty("Команда (если не предмет)")] public string Command;
+            [JsonProperty("Описание предмета")] public string Info;
             [JsonProperty("SkinID предмета")] public ulong SkinID;
-            [JsonProperty("Изображение предмета (если используйте команду или скин)")] public string Url;
-            [JsonProperty("Список предметов для крафта")] public List<Items> items;
-        }
-
-        public class Items
-        {
-            [JsonProperty("Короткое название предмета")] public string ShortName;
             [JsonProperty("Кол-во предмета")] public int Amount;
-            [JsonProperty("SkinID предмета")] public ulong SkinID;
-            [JsonProperty("Изображение (если используется скин)")] public string Url;
+            [JsonProperty("Какой верстак нужен для крафта (Если 0 то не нужен)")] public int LevelWorkBench;
+            [JsonProperty("Ссылка на изображение")] public string Url;
+            [JsonProperty("Список предметов для крафта")] public Dictionary<string, int> ItemsList;
         }
         #endregion
 
         #region Конфиг
-        Configuration config;
-        class Configuration 
+        public Configuration config;
+        public class Configuration
         {
-            [JsonProperty("Список предметов")] public List<Settings> settings;
-            public static Configuration GetNewConfig() 
+            [JsonProperty("Список предметов")] public List<CraftSettings> craftSettings;
+            public static Configuration GetNewCong()
             {
                 return new Configuration
                 {
-                    settings = new List<Settings>()
+                    craftSettings = new List<CraftSettings>
                     {
-                        new Settings
+                        new CraftSettings
                         {
-                            DisplayName = "Дерево",
-                            Description = "Это дерево даст пиздюлей любому!",
-                            Workbench = 1,
-                            ShortName = "wood",
-                            Command = null,
-                            SkinID = 0,
-                            Url = null,
-                            items = new List<Items>()
+                            Enable = true,
+                            Name = "ВЕРТОЛЁТ",
+                            Prefab = "assets/content/vehicles/minicopter/minicopter.entity.prefab",
+                            ShortName = "electric.flasherlight",
+                            Info = "Описание",
+                            SkinID = 1663370375,
+                            Amount = 1,
+                            LevelWorkBench = 3,
+                            Url = "https://imgur.com/Yp2WJl5.png",
+                            ItemsList = new Dictionary<string, int>
                             {
-                                new Items
-                                {
-                                    ShortName = "wood",
-                                    Amount = 1000,
-                                    SkinID = 0,
-                                    Url = null
-                                },
-                                new Items
-                                {
-                                    ShortName = "burlap.gloves.new",
-                                    Amount = 1,
-                                    SkinID = 2358890751,
-                                    Url = "https://imgur.com/ITJgzdK.png"
-                                }
+                                ["wood"] = 100,
+                                ["sulfur"] = 1000,
+                                ["stones"] = 100,
+                                ["metal.ore"] = 1000,
+                                ["scrap"] = 100
                             }
-                        }
+                        },
+                        new CraftSettings
+                        {
+                            Enable = true,
+                            Name = "Переработчик",
+                            Prefab = "assets/bundled/prefabs/static/recycler_static.prefab",
+                            ShortName = "research.table",
+                            Info = "Вы получите полноценный переработчик, который Вы сможете установить у себя\nдома.",
+                            SkinID = 1789555932,
+                            Amount = 1,
+                            LevelWorkBench = 2,
+                            Url = "https://i.imgur.com/xXL3d47.png",
+                            ItemsList = new Dictionary<string, int>
+                            {
+                                ["wood"] = 100,
+                                ["sulfur"] = 1000,
+                                ["scrap"] = 100
+                            }
+                        },
+                        new CraftSettings
+                        {
+                            Enable = true,
+                            Name = "Военная лодка",
+                            Prefab = "assets/content/vehicles/boats/rhib/rhib.prefab",
+                            ShortName = "electric.sirenlight",
+                            Info = "Описание",
+                            SkinID = 1789555583,
+                            Amount = 1,
+                            LevelWorkBench = 2,
+                            Url = "https://i.imgur.com/u5QgVGS.png",
+                            ItemsList = new Dictionary<string, int>
+                            {
+                                ["wood"] = 100,
+                                ["sulfur"] = 1000
+                            }
+                        },
+                        new CraftSettings
+                        {
+                            Enable = true,
+                            Name = "Деревянная лодка",
+                            Prefab = "assets/content/vehicles/boats/rowboat/rowboat.prefab",
+                            ShortName = "coffin.storage",
+                            Info = "Описание",
+                            SkinID = 1789554931,
+                            Amount = 1,
+                            LevelWorkBench = 2,
+                            Url = "https://i.imgur.com/UGuYMkA.png",
+                            ItemsList = new Dictionary<string, int>
+                            {
+                                ["wood"] = 100,
+                                ["sulfur"] = 1000
+                            }
+                        },
+                        new CraftSettings
+                        {
+                            Enable = true,
+                            Name = "Воздушный шар",
+                            Prefab = "assets/prefabs/deployable/hot air balloon/hotairballoon.prefab",
+                            ShortName = "wall.graveyard.fence",
+                            Info = "Описание",
+                            SkinID = 1789557339,
+                            Amount = 1,
+                            LevelWorkBench = 3,
+                            Url = "https://i.imgur.com/86CDnDd.png",
+                            ItemsList = new Dictionary<string, int>
+                            {
+                                ["wood"] = 100,
+                                ["sulfur"] = 1000
+                            }
+                        },
+                        new CraftSettings
+                        {
+                            Enable = true,
+                            Name = "Машина",
+                            Prefab = "assets/content/vehicles/sedan_a/sedantest.entity.prefab",
+                            ShortName = "woodcross",
+                            Info = "Описание",
+                            SkinID = 1789556977,
+                            Amount = 1,
+                            LevelWorkBench = 3,
+                            Url = "https://i.imgur.com/KMDl39b.png",
+                            ItemsList = new Dictionary<string, int>
+                            {
+                                ["wood"] = 100,
+                                ["sulfur"] = 1000
+                            }
+                        },
+                        new CraftSettings
+                        {
+                            Enable = true,
+                            Name = "Гранатомёт",
+                            Prefab = null,
+                            ShortName = "multiplegrenadelauncher",
+                            Info = "Описание",
+                            SkinID = 0,
+                            Amount = 1,
+                            LevelWorkBench = 3,
+                            Url = null,
+                            ItemsList = new Dictionary<string, int>
+                            {
+                                ["wood"] = 100,
+                                ["sulfur"] = 1000
+                            }
+                        },
                     }
                 };
             }
         }
-        
         protected override void LoadConfig()
         {
             base.LoadConfig();
             try
             {
                 config = Config.ReadObject<Configuration>();
-                if (config?.settings == null) LoadDefaultConfig();
+                if (config?.craftSettings == null) LoadDefaultConfig();
             }
             catch
             {
@@ -99,50 +190,67 @@ namespace Oxide.Plugins
             NextTick(SaveConfig);
         }
 
-        protected override void LoadDefaultConfig() => config = Configuration.GetNewConfig();
+        protected override void LoadDefaultConfig() => config = Configuration.GetNewCong();
         protected override void SaveConfig() => Config.WriteObject(config);
         #endregion
 
         #region Хуки
         void OnServerInitialized()
         {
-			    PrintWarning("╔═══════════════════════════════════════════════╗");
-                PrintWarning("║            Craft System Plugin                ║");
-                PrintWarning("║                                               ║");
-                PrintWarning("║            Author: root                       ║");
-                PrintWarning($"║           Version: {Version}                      ║");
-                PrintWarning("║                                               ║");
-                PrintWarning("║                                               ║");
-                PrintWarning("║                                               ║");
-                PrintWarning("║         Plugin successfully initialized!      ║");
-                PrintWarning("╚═══════════════════════════════════════════════╝");
-            foreach (var check in config.settings)
+            foreach (var check in config.craftSettings)
             {
-                if (check.Url != null)
-                    ImageLibrary.Call("AddImage", check.Url, check.Url);
-                if (check.ShortName != null)
-                    ImageLibrary.Call("AddImage", $"https://rustlabs.com/img/items180/{check.ShortName}.png", check.ShortName);
-                
-                foreach (var item in check.items)
-                {
-                    if (item.Url != null)
-                        ImageLibrary.Call("AddImage", item.Url, item.Url);
-                    if (item.ShortName != null)
-                        ImageLibrary.Call("AddImage", $"https://rustlabs.com/img/items180/{item.ShortName}.png", item.ShortName);
-                }
+                ImageLibrary.Call("AddImage", check.Url, check.Url);
             }
         }
 
         void Unload()
         {
-            foreach (var check in BasePlayer.activePlayerList)
-                CuiHelper.DestroyUi(check, Layer);
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                CuiHelper.DestroyUi(player, Layer);
+                CuiHelper.DestroyUi(player,LayerCraftInfo);
+            }
+        }
+
+        class BasesEntity : MonoBehaviour
+        {
+            private DestroyOnGroundMissing desGround;
+            private GroundWatch groundWatch;
+            public ulong OwnerID;
+
+            void Awake()
+            {
+                OwnerID = GetComponent<BaseEntity>().OwnerID;
+                desGround = GetComponent<DestroyOnGroundMissing>();
+                if (!desGround) gameObject.AddComponent<DestroyOnGroundMissing>();
+                groundWatch = GetComponent<GroundWatch>();
+                if (!groundWatch) gameObject.AddComponent<GroundWatch>();
+            }
+        }
+
+        void OnEntityBuilt(Planner plan, GameObject go)
+        {
+            var entity = go.ToBaseEntity();
+
+            foreach (var check in config.craftSettings)
+            {
+                if (entity != null && entity.skinID == check.SkinID && entity.skinID != 0)
+                {
+                    BaseEntity all = GameManager.server.CreateEntity(check.Prefab, entity.transform.position, entity.transform.rotation) as BaseEntity;
+                    all.Spawn();
+                    entity.Kill();
+                    all.gameObject.AddComponent<BasesEntity>();
+                }
+            }
         }
         #endregion
 
         #region Команды
         [ChatCommand("craft")]
-        void ChatCraft(BasePlayer player) => CraftUI(player);
+        void cmdCraft(BasePlayer player, string command, string[] args)
+        {
+            CraftUI(player, 1);
+        }
 
         [ConsoleCommand("craft")]
         void ConsoleCraft(ConsoleSystem.Arg args)
@@ -152,372 +260,332 @@ namespace Oxide.Plugins
             {
                 if (args.Args[0] == "item")
                 {
-                    ItemUI(player, int.Parse(args.Args[1]));
-                }
-                if (args.Args[0] == "craftitem")
-                {
-                    var check = config.settings[int.Parse(args.Args[1])];
-                    if (player.currentCraftLevel < check.Workbench)
+                    bool enable = true;
+                    var items = config.craftSettings.FirstOrDefault(p => p.ShortName == args.Args[1]);
+                    if (player.currentCraftLevel < items.LevelWorkBench)
                     {
-                        AlertUI(player, $"Нужен верстак {check.Workbench} уровня");
+                        SendReply(player, $"Нужен верстак {items.LevelWorkBench} уровня");
                         return;
                     }
-                    foreach (var item in check.items)
+                    foreach (var check in items.ItemsList)
                     {
-                        var name = ItemManager.CreateByItemID(ItemManager.FindItemDefinition(item.ShortName).itemid);
-                        var haveItem = HaveItem(player, name.info.itemid, item.SkinID, item.Amount);
-                        if (!haveItem) 
-                        {
-                            AlertUI(player, $"У вас не хватает ресурсов для крафта");
-                            return;
-                        }
+                        var haveCount = player.inventory.GetAmount(ItemManager.FindItemDefinition(check.Key).itemid);
+                        if (haveCount >= check.Value) continue;
+                        enable = false;
                     }
-                    foreach (var item in check.items)
-                        player.inventory.Take(null, ItemManager.FindItemDefinition(item.ShortName).itemid, item.Amount);
-                    if (check.Command != null)
+                    if (!enable)
                     {
-                        Server.Command(check.Command.Replace("%STEAMID%", player.UserIDString));
+                        SendReply(player, "У вас не хватает ресурсов для крафта");
+                        return;
                     }
-                    if (check.ShortName != null)
+                    foreach (var check in items.ItemsList)
                     {
-                        var item = ItemManager.CreateByItemID(ItemManager.FindItemDefinition(check.ShortName).itemid, 1, check.SkinID);
-                        if (!player.inventory.GiveItem(item))
-                        {
-                            item.Drop(player.inventory.containerMain.dropPosition, player.inventory.containerMain.dropVelocity, new Quaternion());
-                            return;
-                        }
+                        player.inventory.Take(null, ItemManager.FindItemDefinition(check.Key).itemid, check.Value);
                     }
-                    SendReply(player, $"Вы успешно скрафтили {check.DisplayName}");
-                    CuiHelper.DestroyUi(player, Layer);
+                    var skinId = items.SkinID != 0 ? items.SkinID : 0;
+                    var item = ItemManager.CreateByItemID(ItemManager.FindItemDefinition(items.ShortName).itemid, 1, skinId);
+                    item.name = items.Name;
+                    if (!player.inventory.GiveItem(item))
+                    {
+                        item.Drop(player.inventory.containerMain.dropPosition, player.inventory.containerMain.dropVelocity, new Quaternion());
+                        return;
+                    }
+                    player.SendConsoleCommand("closs");
+                    SendReply(player, $"Вы успешно скрафтили: {items.Name}");
+                    return;
+                }
+                if (args.Args[0] == "info")
+                {
+                    string craft = args.Args[1];
+                    CraftInfoUI(player, craft);
                 }
                 if (args.Args[0] == "skip")
                 {
-                    CraftUI(player, int.Parse(args.Args[1]));
+                    int page = 0;
+                    if (!args.HasArgs(2) || !int.TryParse(args.Args[1], out page)) return;
+                    CraftUI(player, page);
                 }
             }
+        }
+
+        [ConsoleCommand("closs")]
+        void ConsoleCloss(ConsoleSystem.Arg args)
+        {
+            var player = args.Player();
+            CuiHelper.DestroyUi(player, LayerCraftInfo);
         }
         #endregion
 
         #region Интерфейс
-        void CraftUI(BasePlayer player, int page = 0)
+        private void CraftUI(BasePlayer player, int page = 1)
         {
             CuiHelper.DestroyUi(player, Layer);
-            var container = new CuiElementContainer();
+            CuiElementContainer container = new CuiElementContainer();
+            int CraftCount = config.craftSettings.Count(), CountCraft = 0, Count = 4;
+            float Position = 0.2f, Width = (0.146f), Height = 0.3f, Margin = 0.005f, MinHeight = 0.503f;
+
+            if (CraftCount >= Count) Position = 0.5f - Count / 2f * Width - (Count - 1) / 2f * Margin;
+            else Position = 0.5f - CraftCount / 2f * Width - (CraftCount - 1) / 2f * Margin;
+            CraftCount -= Count;
 
             container.Add(new CuiPanel
             {
                 CursorEnabled = true,
                 RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMax = "0 0" },
-                Image = { Color = "0 0 0 0.9", Material = "assets/content/ui/uibackgroundblur.mat" },
+                Image = { Color = "0 0 0 0.9" },
             }, "Overlay", Layer);
 
             container.Add(new CuiButton
             {
-                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMax = "0 0" },
-                Button = { Color = "0 0 0 0", Close = Layer },
+                RectTransform = { AnchorMin = "-2 -2", AnchorMax = "2 2", OffsetMax = "0 0" },
+                Button = { Color = "0 0 0 0.9", Close = Layer },
                 Text = { Text = "" }
             }, Layer);
 
-            container.Add(new CuiPanel
+            container.Add(new CuiButton
             {
-                RectTransform = { AnchorMin = "0.15 0.15", AnchorMax = "0.49 0.85", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0" }
-            }, Layer, "Item");
-
-            container.Add(new CuiPanel
-            {
-                RectTransform = { AnchorMin = "0.497 0.154", AnchorMax = "0.502 0.85", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0.1" }
+                RectTransform = { AnchorMin = "0 0.9", AnchorMax = "1 1", OffsetMax = "0 0" },
+                Button = { Color = "0 0 0 0" },
+                Text = { Text = $"<b><size=30>Система крафта предметов</size></b>\nСтраница: {page} из {(config.craftSettings.Count() / 9) + 1}".ToUpper(), Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.MiddleCenter, Font = "robotocondensed-regular.ttf", FontSize = 12 }
             }, Layer);
 
+            #region Скип
+            if (page > 1)
+            {
                 container.Add(new CuiButton
                 {
-                    RectTransform = { AnchorMin = $"0.479 0.117", AnchorMax = $"0.499 0.15", OffsetMax = "0 0" },
-                    Button = { Color = "1 1 1 0.1", Command = page >= 1 ? $"craft skip {page - 1} " : "" },
-                    Text = { Text = "<", Color = "1 1 1 0.5", Align = TextAnchor.MiddleCenter, FontSize = 20, Font = "robotocondensed-regular.ttf" }
+                    RectTransform = { AnchorMin = "0 0.45", AnchorMax = "0.057 0.55", OffsetMax = "0 0" },
+                    Button = { Color = "0 0 0 0", Command = $"craft skip {page - 1}" },
+                    Text = { Text = $"<", Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.MiddleCenter, Font = "robotocondensed-bold.ttf", FontSize = 60 }
                 }, Layer);
+            }
 
+            if (page < (int)Math.Ceiling((double)config.craftSettings.ToList().Count / 8))
+            {
                 container.Add(new CuiButton
                 {
-                    RectTransform = { AnchorMin = $"0.5 0.117", AnchorMax = $"0.52 0.15", OffsetMax = "0 0" },
-                    Button = { Color = "1 1 1 0.1", Command = config.settings.Count() > (page + 1) * 9 ? $"craft skip {page + 1}" : "" },
-                    Text = { Text = ">", Color = "1 1 1 0.5", Align = TextAnchor.MiddleCenter, FontSize = 20, Font = "robotocondensed-regular.ttf" }
+                    RectTransform = { AnchorMin = "0.943 0.45", AnchorMax = "1 0.55", OffsetMax = "0 0" },
+                    Button = { Color = "0 0 0 0", Command = $"craft skip {page + 1}" },
+                    Text = { Text = $">", Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.MiddleCenter, Font = "robotocondensed-bold.ttf", FontSize = 60 }
                 }, Layer);
+            }
+            #endregion
 
-            container.Add(new CuiPanel
+            foreach (var check in config.craftSettings.Skip((page - 1) * 8).Take(8))
             {
-                RectTransform = { AnchorMin = "0.51 0.15", AnchorMax = "0.85 0.85", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0" }
-            }, Layer, "CraftItem");
-
-            container.Add(new CuiPanel
-            {
-                RectTransform = { AnchorMin = "0 0.85", AnchorMax = "1 1", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0.1" }
-            }, "CraftItem", "Title");
-
-            container.Add(new CuiLabel
-            {
-                RectTransform = { AnchorMin = "0.04 0", AnchorMax = "0.96 1", OffsetMax = "0 0" },
-                Text = { Text = $"<size=35><b>Крафт предметов</b></size>\nЗдесь вы можете скрафтить предметы, которые есть в списке(слева)!", Color = "1 1 1 0.5", Align = TextAnchor.MiddleLeft, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-            }, "Title");
-
-            float width = 1f, height = 0.1113f, startxBox = 0f, startyBox = 1.005f - height, xmin = startxBox, ymin = startyBox, z = 0;
-            foreach (var check in config.settings.Skip(page * 9).Take(9))
-            {
-                container.Add(new CuiPanel
+                if (check.Enable)
                 {
-                    RectTransform = { AnchorMin = $"{xmin} {ymin}", AnchorMax = $"{xmin + width} {ymin + height * 1}", OffsetMin = "2 2", OffsetMax = "-2 -2" },
-                    Image = { Color = "1 1 1 0" }
-                }, "Item", "Items");
-
-                container.Add(new CuiButton
-                {
-                    RectTransform = { AnchorMin = $"0.137 0", AnchorMax = $"1 1", OffsetMax = "0 0" },
-                    Button = { Color = "1 1 1 0.1", Command = $"craft item {z + page * 9}" },
-                    Text = { Text = "", Color = "1 1 1 0.5", Align = TextAnchor.MiddleCenter, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-                }, "Items", "Text");
-
-                var workbench = check.Workbench != 0 ? $"{check.Workbench} уровня!" : "Не требуется!";
-                container.Add(new CuiLabel
-                {
-                    RectTransform = { AnchorMin = "0.02 0", AnchorMax = "0.96 1", OffsetMax = "0 0" },
-                    Text = { Text = $"<size=20><b>{check.DisplayName}</b></size>\nДля крафта требуется {check.items.Count()} предметов! Верстак {workbench}", Color = "1 1 1 0.5", Align = TextAnchor.MiddleLeft, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-                }, "Text");
-
-                container.Add(new CuiPanel
-                {
-                    RectTransform = { AnchorMin = $"0 0", AnchorMax = $"0.13 1", OffsetMax = "0 0" },
-                    Image = { Color = "1 1 1 0.1" }
-                }, "Items", "Image");
-
-                var image = check.Command != null ? check.Url : check.ShortName;
-                container.Add(new CuiElement
-                {
-                    Parent = "Image",
-                    Components =
+                    container.Add(new CuiButton()
                     {
-                        new CuiRawImageComponent { Png = (string) ImageLibrary.Call("GetImage", image), Color = "1 1 1 0.8", FadeIn = 1f },
-                        new CuiRectTransformComponent { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "6 6", OffsetMax = "-6 -6" }
-                    }
-                });
+                        RectTransform = { AnchorMin = $"{Position} {MinHeight}", AnchorMax = $"{Position + Width} {MinHeight + Height}", OffsetMax = "0 0" },
+                        Button = { Color = "1 1 1 0.1" },
+                        Text = { Text = $" " }
+                    }, Layer, $"{check.ShortName}");
 
-                xmin += width;
-                if (xmin + width >= 1)
-                {
-                    xmin = startxBox;
-                    ymin -= height;
+                    container.Add(new CuiButton
+                    {
+                        RectTransform = { AnchorMin = "0.1 0.21", AnchorMax = "0.9 0.84", OffsetMax = "0 0" },
+                        Button = { Color = "0 0 0 0" },
+                        Text = { Text = "", Align = TextAnchor.MiddleCenter, FontSize = 14, Font = "robotocondensed-bold.ttf" }
+                    }, $"{check.ShortName}", "Image");
+
+                    var images = check.Url != null ? $"{check.Url}" : $"{check.ShortName}";
+                    container.Add(new CuiElement
+                    {
+                        Parent = "Image",
+                        Components =
+                            {
+                                new CuiRawImageComponent { Png = (string) ImageLibrary.Call("GetImage", images) },
+                                new CuiRectTransformComponent { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "1 1", OffsetMax = "-1 -1" }
+                            }
+                    });
+
+                    container.Add(new CuiButton
+                    {
+                        RectTransform = { AnchorMin = "0.028 0.03", AnchorMax = "0.972 0.2", OffsetMax = "0 0" },
+                        Button = { Color = "0.39 0.73 0.49 0.9", Material = "assets/content/ui/uibackgroundblur.mat", Command = $"craft info {check.ShortName}", Close = Layer },
+                        Text = { Text = "ОТКРЫТЬ", Align = TextAnchor.MiddleCenter, FontSize = 20, Font = "robotocondensed-regular.ttf" }
+                    }, $"{check.ShortName}");
+
+                    container.Add(new CuiButton
+                    {
+                        RectTransform = { AnchorMin = "0 0.85", AnchorMax = "1 1", OffsetMax = "0 0" },
+                        Button = { Color = "1 1 1 0" },
+                        Text = { Text = $"{check.Name}", Align = TextAnchor.MiddleCenter, FontSize = 16, Font = "robotocondensed-regular.ttf" }
+                    }, $"{check.ShortName}");
+
+                    CountCraft += 1;
+                    if (CountCraft % Count == 0)
+                    {
+                        if (CraftCount > Count)
+                        {
+                            Position = 0.5f - Count / 2f * Width - (Count - 1) / 2f * Margin;
+                            CraftCount -= Count;
+                        }
+                        else
+                        {
+                            Position = 0.5f - CraftCount / 2f * Width - (CraftCount - 1) / 2f * Margin;
+                        }
+                        MinHeight -= ((Margin * 2) + Height);
+                    }
+                    else
+                    {
+                        Position += (Width + Margin);
+                    }
                 }
-                z++;
             }
 
             CuiHelper.AddUi(player, container);
-            ItemUI(player, 0);
         }
 
-        void ItemUI(BasePlayer player, int z)
+        #region Предмет
+        private void CraftInfoUI(BasePlayer player, string craft)
         {
-            DestroyUI(player);
-            var container = new CuiElementContainer();
-
-            var check = config.settings[z];
-
-            container.Add(new CuiPanel
-            {
-                RectTransform = { AnchorMin = "0 0.6", AnchorMax = "0.3 0.845", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0.1" }
-            }, "CraftItem", "ItemImage");
-
-            var image = check.Url != null ? check.Url : check.ShortName;
-            container.Add(new CuiElement
-            {
-                Parent = $"ItemImage",
-                Components =
-                {
-                    new CuiRawImageComponent { Png = (string) ImageLibrary.Call("GetImage", image) },
-                    new CuiRectTransformComponent { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "10 10", OffsetMax = "-10 -10" }
-                }
-            });
+            CuiHelper.DestroyUi(player, LayerCraftInfo);
+            CuiElementContainer container = new CuiElementContainer();
+            CraftSettings check = config.craftSettings.Find(p => p.ShortName == craft);
+            int ItemCount = check.ItemsList.Count(), Count = 6;
+            float Position = 0.2f, Width = 0.08f, Height = 0.14f, Margin = 0.005f, MinHeight = 0.26f;
+            Position = 0.5f - ItemCount / 2f * Width - (ItemCount - 1) / 2f * Margin;
+            int current = 1;
 
             container.Add(new CuiPanel
             {
-                RectTransform = { AnchorMin = "0.307 0.6", AnchorMax = "1 0.845", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0.1" }
-            }, "CraftItem", "ItemDescription");
-
-            container.Add(new CuiLabel
-            {
-                RectTransform = { AnchorMin = "0.04 0.08", AnchorMax = "0.96 0.92", OffsetMax = "0 0" },
-                Text = { Text = $"<size=20><b>Описание предмета</b></size>\n{check.Description}", Color = "1 1 1 0.5", Align = TextAnchor.UpperLeft, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-            }, "ItemDescription");
-
-            container.Add(new CuiPanel
-            {
-                RectTransform = { AnchorMin = "0 0.445", AnchorMax = "0.7 0.595", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0.1" }
-            }, "CraftItem", "ItemDesc");
-
-            container.Add(new CuiLabel
-            {
-                RectTransform = { AnchorMin = "0.04 0", AnchorMax = "0.96 1", OffsetMax = "0 0" },
-                Text = { Text = $"<size=20><b>Что нужно для крафта</b></size>\nСнизу вы можете посмотреть предметы для крафта!", Color = "1 1 1 0.5", Align = TextAnchor.MiddleLeft, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-            }, "ItemDesc");
-
-            container.Add(new CuiPanel
-            {
-                RectTransform = { AnchorMin = "0.707 0.445", AnchorMax = "1 0.595", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0.1" }
-            }, "CraftItem", "ItemCounts");
-
-            container.Add(new CuiLabel
-            {
-                RectTransform = { AnchorMin = "0.04 0", AnchorMax = "0.96 1", OffsetMax = "0 0" },
-                Text = { Text = $"<size=22><b>{check.items.Count()}</b></size>\nПредметов для крафта", Color = "1 1 1 0.5", Align = TextAnchor.MiddleCenter, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-            }, "ItemCounts");
-
-            container.Add(new CuiPanel
-            {
-                RectTransform = { AnchorMin = "0.707 0.153", AnchorMax = "1 0.438", OffsetMax = "0 0" },
-                Image = { Color = "1 1 1 0.1" }
-            }, "CraftItem", "ItemWorkbench");
-
-            var workbench = check.Workbench != 0 ? $"<size=20><b>Верстак</b></size>\nТребуется {check.Workbench} уровень!" : "<size=20><b>Верстак</b></size>\nНе требуется!";
-
-            container.Add(new CuiLabel
-            {
+                CursorEnabled = true,
                 RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMax = "0 0" },
-                Text = { Text = $"{workbench}", Color = "1 1 1 0.5", Align = TextAnchor.MiddleCenter, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-            }, "ItemWorkbench");
+                Image = { Color = "0 0 0 0.9" },
+            }, "Overlay", LayerCraftInfo);
 
             container.Add(new CuiButton
             {
-                RectTransform = { AnchorMin = "0.707 0.011", AnchorMax = "1 0.145", OffsetMax = "0 0" },
-                Button = { Color = "1 1 1 0.1", Command = $"craft craftitem {z}" },
-                Text = { Text = "<size=20><b>Скрафтить</b></size>\nПредмет", Color = "1 1 1 0.5", Align = TextAnchor.MiddleCenter, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-            }, "CraftItem", "ItemCraft");
+                RectTransform = { AnchorMin = "-2 -2", AnchorMax = "2 2", OffsetMax = "0 0" },
+                Button = { Color = "0 0 0 0.9", Command = "chat.say /craft", Close = LayerCraftInfo },
+                Text = { Text = "" }
+            }, LayerCraftInfo);
 
-            container.Add(new CuiPanel
+            container.Add(new CuiButton
             {
-                RectTransform = { AnchorMin = $"0 0", AnchorMax = $"0.705 0.442", OffsetMax = "0 0" },
-                Image = { Color = "0 0 0 0" }
-            }, "CraftItem", "ItemCount");
+                RectTransform = { AnchorMin = "0.43 0.65", AnchorMax = "0.57 0.895", OffsetMax = "0 0" },
+                Button = { Color = "0 0 0 0" },
+                Text = { Text = "" }
+            }, LayerCraftInfo, "Image");
 
-            float width = 0.251f, height = 0.33f, startxBox = -0.006f, startyBox = 1f - height, xmin = startxBox, ymin = startyBox;
-            for (int x = 0; x < 12; x++)
+            var images = check.Url != null ? $"{check.Url}" : $"{check.ShortName}";
+            container.Add(new CuiElement
             {
-                container.Add(new CuiPanel
+                Parent = "Image",
+                Components =
                 {
-                    RectTransform = { AnchorMin = $"{xmin} {ymin}", AnchorMax = $"{xmin + width} {ymin + height * 1}", OffsetMin = "2 2", OffsetMax = "-2 -2" },
-                    Image = { Color = "1 1 1 0.1" }
-                }, "ItemCount", "Items");
-
-                xmin += width;
-                if (xmin + width >= 1)
-                {
-                    xmin = startxBox;
-                    ymin -= height;
+                    new CuiRawImageComponent { Png = (string) ImageLibrary.Call("GetImage", images) },
+                    new CuiRectTransformComponent { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMax = "0 0" }
                 }
-            }
+            });
 
-            float width1 = 0.251f, height1 = 0.33f, startxBox1 = -0.006f, startyBox1 = 1f - height1, xmin1 = startxBox1, ymin1 = startyBox1;
-            foreach (var item in check.items)
+            container.Add(new CuiButton
             {
-                container.Add(new CuiPanel
-                {
-                    RectTransform = { AnchorMin = $"{xmin1} {ymin1}", AnchorMax = $"{xmin1 + width1} {ymin1 + height1 * 1}", OffsetMin = "2 2", OffsetMax = "-2 -2" },
-                    Image = { Color = "0 0 0 0" }
-                }, "ItemCount", "Items");
+                RectTransform = { AnchorMin = "0 0.59", AnchorMax = "1 0.63", OffsetMax = "0 0" },
+                Button = { Color = "0 0 0 0" },
+                Text = { Text = $"{check.Name}", Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.MiddleCenter, FontSize = 25, Font = "robotocondensed-bold.ttf" }
+            }, LayerCraftInfo);
 
-                var imagecraft = item.Url != null ? item.Url : item.ShortName;
+            container.Add(new CuiButton
+            {
+                RectTransform = { AnchorMin = "0 0.465", AnchorMax = "1 0.585", OffsetMax = "0 0" },
+                Button = { Color = "0 0 0 0" },
+                Text = { Text = $"{check.Info}", Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.UpperCenter, FontSize = 18, Font = "robotocondensed-regular.ttf" }
+            }, LayerCraftInfo);
+
+            container.Add(new CuiButton
+            {
+                RectTransform = { AnchorMin = "0 0.425", AnchorMax = "1 0.46", OffsetMax = "0 0" },
+                Button = { Color = "0 0 0 0" },
+                Text = { Text = $"Предметы необходимые для крафта", Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.MiddleCenter, FontSize = 22, Font = "robotocondensed-bold.ttf" }
+            }, LayerCraftInfo);
+
+            container.Add(new CuiButton
+            {
+                RectTransform = { AnchorMin = "0.4 0.13", AnchorMax = "0.6 0.18", OffsetMax = "0 0" },
+                Button = { Color = "1 1 1 0.1", Command = $"craft item {check.ShortName}" },
+                Text = { Text = "СКРАФТИТЬ", Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.MiddleCenter, FontSize = 22, Font = "robotocondensed-bold.ttf" }
+            }, LayerCraftInfo);
+
+            var textWork = 0 < check.LevelWorkBench ? $"Нужен верстак {check.LevelWorkBench} уровня" : "Верстак не нужен";
+            container.Add(new CuiButton
+            {
+                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 0.03", OffsetMax = "0 0" },
+                Button = { Color = "0 0 0 0" },
+                Text = { Text = textWork, Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.MiddleCenter, FontSize = 14, Font = "robotocondensed-bold.ttf" }
+            }, LayerCraftInfo);
+
+            foreach (var item in check.ItemsList)
+            {
+                int haveCount = player.inventory.GetAmount(ItemManager.FindItemDefinition(item.Key).itemid);
+                var colors = haveCount >= item.Value ? "0.39 0.73 0.49 0.3" : "0.76 0.24 0.24 0.3";
+                container.Add(new CuiButton
+                {
+                    RectTransform = { AnchorMin = $"{Position} {MinHeight}", AnchorMax = $"{Position + Width} {MinHeight + Height}", OffsetMax = "0 0" },
+                    Button = { Color = colors, Material = "assets/content/ui/uibackgroundblur.mat" },
+                    Text = { Text = $"", Align = TextAnchor.LowerCenter, FontSize = 12, Font = "robotocondensed-bold.ttf" }
+                }, LayerCraftInfo, "Images");
+
                 container.Add(new CuiElement
                 {
-                    Parent = "Items",
+                    Parent = "Images",
                     Components =
                     {
-                        new CuiRawImageComponent { Png = (string) ImageLibrary.Call("GetImage", imagecraft), Color = "1 1 1 0.8", FadeIn = 1f },
-                        new CuiRectTransformComponent { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "6 6", OffsetMax = "-6 -6" }
+                        new CuiRawImageComponent { Png = (string) ImageLibrary.Call("GetImage", item.Key) },
+                        new CuiRectTransformComponent { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "2 2", OffsetMax = "-2 -2" }
                     }
                 });
 
-                container.Add(new CuiLabel
+                var text = haveCount >= item.Value ? "СОБРАНО " : $"X{item.Value} ";
+                container.Add(new CuiButton
                 {
-                    RectTransform = { AnchorMin = "0.02 0.02", AnchorMax = "0.98 0.98", OffsetMax = "0 0" },
-                    Text = { Text = $"{item.Amount} шт.", Color = "1 1 1 0.5", Align = TextAnchor.LowerRight, FontSize = 12, Font = "robotocondensed-regular.ttf" }
-                }, "Items");
-
-                xmin1 += width1;
-                if (xmin1 + width1 >= 1)
+                    RectTransform = { AnchorMin = $"0 0", AnchorMax = $"1 1", OffsetMax = "0 0" },
+                    Button = { Color = "0 0 0 0" },
+                    Text = { Text = text, Color = HexToUiColor("#FFFFFF5A"), Align = TextAnchor.LowerRight, FontSize = 14, Font = "robotocondensed-bold.ttf" }
+                }, "Images");
+                Position += (Width + Margin);
+                current++;
+                if (current > 6)
                 {
-                    xmin1 = startxBox1;
-                    ymin1 -= height1;
+                    break;
                 }
             }
 
             CuiHelper.AddUi(player, container);
-        }
-
-
-        void AlertUI(BasePlayer player, string text)
-        {
-            CuiHelper.DestroyUi(player, "AlertUI");
-            var container = new CuiElementContainer();
-
-            container.Add(new CuiPanel
-            {
-                RectTransform = { AnchorMin = "0.2 0.07", AnchorMax = "0.8 0.115", OffsetMax = "0 0" },
-                Image = { Color = "0 0 0 0" }
-            }, Layer, "AlertUI");
-
-            container.Add(new CuiLabel
-            {
-                RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMax = "0 0" },
-                Text = { Text = $"{text}", Color = "1 1 1 0.5", Align = TextAnchor.MiddleCenter, FontSize = 12, Font = "robotocondensed-regular.ttf", FadeIn = 1.5f }
-            }, "AlertUI");
-
-            CuiHelper.AddUi(player, container);
-            timer.In(5f, () => {
-                CuiHelper.DestroyUi(player, "AlertUI");
-            });
         }
         #endregion
 
-        #region Хелпер
-        void DestroyUI(BasePlayer player)
+        #endregion
+
+        #region Helpers
+        private static string HexToUiColor(string hex)
         {
-            CuiHelper.DestroyUi(player, "ItemImage");
-            CuiHelper.DestroyUi(player, "ItemDescription");
-            CuiHelper.DestroyUi(player, "ItemDesc");
-            CuiHelper.DestroyUi(player, "ItemWorkbench");
-            CuiHelper.DestroyUi(player, "ItemCraft");
-            CuiHelper.DestroyUi(player, "ItemCount");
-            CuiHelper.DestroyUi(player, "ItemCounts");
-        }
-
-        public bool HaveItem(BasePlayer player, int itemID, ulong skinID, int amount)
-        {
-            if (skinID == 0U)
+            if (string.IsNullOrEmpty(hex))
             {
-                if (player.inventory.FindItemByItemID(itemID) != null &&
-                    player.inventory.FindItemByItemID(itemID).amount >= amount) return true;
-                return false;
-            }
-            else
-            {
-
-                List<Item> items = new List<Item>();
-
-                items.AddRange(player.inventory.FindItemsByItemID(itemID));
-
-                foreach (var item in items)
-                {
-                    if (item.skin == skinID && item.amount >= amount)
-                    {
-                        return true;
-                    }
-                }
+                hex = "#FFFFFFFF";
             }
 
-            return false;
+            var str = hex.Trim('#');
+
+            if (str.Length == 6)
+                str += "FF";
+
+            if (str.Length != 8)
+            {
+                throw new Exception(hex);
+                throw new InvalidOperationException("Cannot convert a wrong format.");
+            }
+
+            var r = byte.Parse(str.Substring(0, 2), NumberStyles.HexNumber);
+            var g = byte.Parse(str.Substring(2, 2), NumberStyles.HexNumber);
+            var b = byte.Parse(str.Substring(4, 2), NumberStyles.HexNumber);
+            var a = byte.Parse(str.Substring(6, 2), NumberStyles.HexNumber);
+
+            Color color = new Color32(r, g, b, a);
+
+            return $"{color.r:F2} {color.g:F2} {color.b:F2} {color.a:F2}";
         }
         #endregion
     }

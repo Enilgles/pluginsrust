@@ -1,1174 +1,936 @@
-using Oxide.Core;
 using Oxide.Game.Rust.Cui;
-using System.Collections.Generic;
-using System.Threading.Tasks;
-using Newtonsoft.Json;
-using System.Text;
-using Rust.Ai.Gen2;
 using System;
+using System.Collections.Generic;
 using System.Linq;
-using UnityEngine;
-using Oxide.Core.Plugins;
-using System.ComponentModel;
+using Newtonsoft.Json;
+
 
 namespace Oxide.Plugins
 {
-    [Info("DeathMessages", "rustmods.ru", "1.4.9")]
-    [Description("Uix DeathMessages")]
-    public class DeathMessages : RustPlugin
+    [Info("Death Messages", "Skrip|Tal", "2.1.55")]
+    class DeathMessages : RustPlugin
     {
+        private static PluginConfig _config;
+        private string version = "2.1.55";
+        private List<DeathMessage> _notes = new List<DeathMessage>();
+        private Dictionary<ulong, HitInfo> _lastHits = new Dictionary<ulong, HitInfo>();
 
-        private void OnDeath(BasePlayer victim, BaseEntity initiator, HitInfo hitInfo)
+        #region Classes / Enums
+
+        class PluginConfig
         {
-            string victimDisplayName = string.Empty;
-            string victimColorName = string.Empty;
-            string initiatorDisplayName = string.Empty;
-            bool needRenameVictim = false;
-            bool needRenameInitiator = false;
 
-            WeaponInfo weaponInfo = GetWeaponInfoFromPrefab(initiator);
+            [JsonProperty("A. Время показа сообщения (сек)")]
+            public int Cooldown { get; set; }
+            [JsonProperty("B. Размер текста")]
+            public int FontSize { get; set; }
+            [JsonProperty("C. Показывать убиства животных")]
+            public bool ShowDeathAnimals { get; set; }
+            [JsonProperty("D. Показывать убийства спящих")]
+            public bool ShowDeathSleepers { get; set; }
+            [JsonProperty("E. Хранение логов")]
+            public bool Log { get; set; }
+            [JsonProperty("F. Цвет атакующего")]
+            public string ColorAttacker { get; set; }
+            [JsonProperty("G. Цвет убитого")]
+            public string ColorVictim { get; set; }
+            [JsonProperty("H. Цвет оружия")]
+            public string ColorWeapon { get; set; }
+            [JsonProperty("I. Цвет дистанции")]
+            public string ColorDistance { get; set; }
+            [JsonProperty("J. Цвет части тела")]
+            public string ColorBodyPart { get; set; }
+            [JsonProperty("K. Дистанция")]
+            public double Distance { get; set; }
+            [JsonProperty("L. Название вертолета")]
+            public string HelicopterName { get; set; }
+            [JsonProperty("M. Название Bradlay (Танк)")]
+            public string BradleyAPCName { get; set; }
+            [JsonProperty("N. Имя NPC")]
+            public string NPCName { get; set; }
+            [JsonProperty("O. Имя Zombie")]
+            public string ZombieName { get; set; }
 
-            float fDistance = Vector3.Distance(victim.transform.position, initiator.transform.position);
-            float sDistance = fDistance > 650 ? 650 : fDistance;
+            [JsonProperty("Оружие")]
+            public Dictionary<string, string> Weapons { get; set; }
+            [JsonProperty("Конструкции")]
+            public Dictionary<string, string> Structures { get; set; }
+            [JsonProperty("Ловушки")]
+            public Dictionary<string, string> Traps { get; set; }
+            [JsonProperty("Турели")]
+            public Dictionary<string, string> Turrets { get; set; }
+            [JsonProperty("Животные")]
+            public Dictionary<string, string> Animals { get; set; }
+            [JsonProperty("Сообщения")]
+            public Dictionary<string, string> Messages { get; set; }
+            [JsonProperty("Части тела")]
+            public Dictionary<string, string> BodyParts { get; set; }
+        }
 
-            if (initiator != null)
+        enum AttackerType
+        {
+            Player,
+            Helicopter,
+            Animal,
+            Turret,
+            Guntrap,
+            Structure,
+            Trap,
+            Invalid,
+            NPC,
+            BradleyAPC,
+            Zombie,
+            ZombieDeath
+        }
+
+        enum VictimType
+        {
+            Player,
+            Helicopter,
+            Animal,
+            Invalid,
+            NPC,
+            BradleyAPC,
+            Zombie,
+            ZombieDeath
+        }
+
+        enum DeathReason
+        {
+            Turret,
+            Guntrap,
+            Helicopter,
+            HelicopterDeath,
+            BradleyAPC,
+            BradleyAPCDeath,
+            Structure,
+            Trap,
+            Animal,
+            AnimalDeath,
+            Generic,
+            Zombie,
+            ZombieDeath,
+            Hunger,
+            Thirst,
+            Cold,
+            Drowned,
+            Heat,
+            Bleeding,
+            Poison,
+            Suicide,
+            Bullet,
+            Arrow,
+            Flamethrower,
+            Slash,
+            Blunt,
+            Fall,
+            Radiation,
+            Stab,
+            Explosion,
+            Unknown
+        }
+
+        class Attacker
+        {
+            public Attacker(BaseEntity entity)
             {
-                initiatorDisplayName = initiator.ShortPrefabName;
+                Entity = entity;
+                Type = InitializeType();
+                Name = InitializeName();
+            }
 
-                if (Configuration.Names.ContainsKey(initiatorDisplayName) == false)
+            public BaseEntity Entity { get; }
+
+            public string Name { get; }
+
+            public AttackerType Type { get; }
+
+            private AttackerType InitializeType()
+            {
+                if (Entity == null)
+                    return AttackerType.Invalid;
+
+                if (Entity.name.Contains("machete.weapon"))
+                    return AttackerType.Zombie;
+
+                if (Entity is NPCMurderer)
+                    return AttackerType.ZombieDeath;
+
+                if (Entity is NPCPlayer)
+                    return AttackerType.NPC;            
+
+                if (Entity is BasePlayer)
+                    return AttackerType.Player;
+
+                if (Entity is BaseHelicopter)   
+                    return AttackerType.Helicopter;				
+
+                if (Entity is BradleyAPC)                
+                    return AttackerType.BradleyAPC;
+
+                if (Entity.name.Contains("agents/"))
+                    return AttackerType.Animal;
+
+                if (Entity.name.Contains("barricades/") || Entity.name.Contains("wall.external.high"))
+                    return AttackerType.Structure;
+
+                if (Entity.name.Contains("beartrap.prefab") || Entity.name.Contains("landmine.prefab") || Entity.name.Contains("spikes.floor.prefab"))
+                    return AttackerType.Trap;
+
+                if (Entity.name.Contains("autoturret_deployed.prefab") || Entity.name.Contains("flameturret.deployed.prefab"))
+                    return AttackerType.Turret;
+                if (Entity.name.Contains("guntrap_deployed.prefab") || Entity.name.Contains("guntrap.deployed.prefab"))
+                    return AttackerType.Guntrap;
+
+                return AttackerType.Invalid;
+            }
+
+            private string InitializeName()
+            {
+
+                if (Entity == null)
+                    return null;
+
+                switch (Type)
                 {
-                    LogToFile("DeathMessages", "[CONFIG ISSUE] Не найдено красивое названия для: " + initiator.ShortPrefabName, this, true);
-                    return;
+
+
+                    case AttackerType.Player:
+                        return Entity.ToPlayer().displayName;
+
+                    case AttackerType.NPC:
+                        return string.IsNullOrEmpty(Entity.ToPlayer()?.displayName) ? _config.NPCName : Entity.ToPlayer()?.displayName;
+
+                    case AttackerType.Helicopter:
+                        return "Patrol Helicopter";
+						
+                    case AttackerType.BradleyAPC:  
+                    case AttackerType.Turret: 
+                    case AttackerType.Guntrap:
+                    case AttackerType.Trap:
+                    case AttackerType.Animal:
+                    case AttackerType.Structure:
+                        return FormatName(Entity.name);
                 }
 
-                needRenameInitiator = true;
-            }
-
-            if ((victim.IsNpc == true || victim.userID.IsSteamId() == false) && Configuration.UseDefaultNPCName == false)
-            {
-                victimDisplayName = "npcplayer";
-                needRenameVictim = true;
-            }
-            else
-            {
-                victimDisplayName = victim.displayName;
-            }
-
-            foreach (var perm in Configuration.ColorsNamePlayer)
-            {
-                if (!victim.IsNpc)
-                {
-                    if (permission.UserHasPermission(victim.UserIDString, perm.Key))
-                    {
-                        victimColorName = perm.Value.ColorDeath;
-                    }
-                }
-            }
-
-            new DeathNote(victimDisplayName, initiatorDisplayName, weaponInfo, sDistance, victimColorName, "#FFFFF", needRenameVictim, needRenameInitiator);
-        }
-
-        private string CreateUIModString()
-        {
-            CuiElementContainer Container = new CuiElementContainer();
-
-            Container.Add(new CuiElement
-            {
-                Name = $"DeathMessages.WeaponMod",
-                Parent = $"DeathMessages.[ValueRemoved]",
-                Components =
-                            {
-                                new CuiImageComponent
-                                {
-                                    FadeIn = 1337f,
-                                    ItemId = 1333333388,
-                                },
-                                new CuiRectTransformComponent
-                                {
-                                    AnchorMin = $"0 0.5",
-                                    AnchorMax = $"0 0.5",
-                                    OffsetMin = $"{{WeaponOffsetMinX}} -6",
-                                    OffsetMax = $"{{WeaponOffsetMaxX}} 6",
-                                },
-                                new CuiOutlineComponent
-                                {
-                                    Color = "0 0 0 1",
-                                    Distance = "-0.5 0.5"
-                                }
-                            }
-            });
-
-            return Container.ToJson();
-        }
-
-        private object OnPlayerDeath(BasePlayer player, HitInfo hitInfo)
-        {
-            if (player != null)
-            {
-                if (hitInfo == null)
-                {
-                    if (lastHitInfo.TryGetValue(player, out hitInfo) == false)
-                    {
-                        return null;
-                    }
-                }
-
-                if (hitInfo.InitiatorPlayer != null)
-                {
-                    if (hitInfo.InitiatorPlayer.IsNpc || player.IsNpc)
-                    {
-                        if (Configuration.ShowNPCDeath == false)
-                        {
-                            return null;
-                        }
-                    }
-
-                    OnDeath(player, hitInfo.InitiatorPlayer, hitInfo);
-                }
-                else
-                {
-                    if (hitInfo.Initiator != null)
-                    {
-                        if (hitInfo.Initiator.IsNpc || player.IsNpc)
-                        {
-                            if (Configuration.ShowNPCDeath == false)
-                            {
-                                return null;
-                            }
-                        }
-                        OnDeath(player, hitInfo.Initiator, hitInfo);
-                    }
-                }
-            }
-            return null;
-        }
-
-        private double lastSave = new DateTimeOffset(DateTime.Now).ToUnixTimeSeconds();
-
-        private void Unload()
-        {
-            if (DeathNotesTimer != null)
-                DeathNotesTimer.Destroy();
-
-            foreach (var player in BasePlayer.activePlayerList)
-            {
-                CuiHelper.DestroyUi(player, "DeathMessages");
-            }
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-            Interface.Oxide.DataFileSystem.WriteObject("DMData", uiHide);
-        }
-
-        private string defaultUIModString = string.Empty;
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-        private string defaultUIHeadShotString = string.Empty;
-        private Dictionary<string, string> prefabName2Item = new Dictionary<string, string>()
-        {
-            ["40mm_grenade_he"] = "multiplegrenadelauncher",
-            ["grenade.beancan.deployed"] = "grenade.beancan",
-            ["grenade.f1.deployed"] = "grenade.f1",
-            ["explosive.satchel.deployed"] = "explosive.satchel",
-            ["explosive.timed.deployed"] = "explosive.timed",
-            ["rocket_basic"] = "rocket.launcher",
-            ["rocket_admin"] = "rocket.launcher",
-            ["rocket_hv"] = "rocket.launcher",
-            ["rocket_fire"] = "rocket.launcher",
-            ["survey_charge.deployed"] = "surveycharge"
-        };
-
-        public static void UpdateUI(bool onInsert)
-        {
-            string deathContainer = Instance.GetUIContainerString();
-            string[] dNotes = new string[DeathNote.DeathNotes.Count];
-            for (int i = 0; i < DeathNote.DeathNotes.Count; i++)
-            {
-                string dNote = string.Copy(DeathNote.DeathNotes[i]);
-                dNote = dNote.Replace($"{{MainOffsetMinY}}", $"{-66 + (Instance.Configuration.UI.OffsetY) - i * 25}");
-                dNote = dNote.Replace($"{{MainOffsetMaxY}}", $"{-46 + (Instance.Configuration.UI.OffsetY) - i * 25}");
-
-                if (i == 0 && onInsert)
-                    dNote = dNote.Replace("1337", Instance.Configuration.FadeIn);
-                else
-                    dNote = dNote.Replace("1337", "0");
-
-                dNotes[i] = dNote;
-            }
-
-            foreach (var player in BasePlayer.activePlayerList)
-            {
-                TemporaryBool showUI;
-                if (Instance.uiHide.TryGetValue(player.userID, out showUI) && showUI.Value == false)
-                    continue;
-
-                CuiHelper.DestroyUi(player, "DeathMessages");
-                CuiHelper.AddUi(player, deathContainer);
-
-                for (int i = 0; i < dNotes.Length; i++)
-                {
-                    CuiHelper.AddUi(player, dNotes[i]);
-                }
+                return string.Empty;
             }
         }
 
-        public static double GetStringWidth(string message, string font, int fontSize)
+        class Victim
         {
-            if (message.Contains("</color>"))
+            public Victim(BaseCombatEntity entity)
             {
-                message = message.Substring(16);
-                message = message.Replace("</color>", "");
+                Entity = entity;
+                Type = InitializeType();
+                Name = InitializeName();
             }
 
-            System.Drawing.Font stringFont = new System.Drawing.Font(font, fontSize, System.Drawing.FontStyle.Bold);
-            using (System.Drawing.Bitmap tempImage = new System.Drawing.Bitmap(200, 200))
+            public BaseCombatEntity Entity { get; }
+
+            public string Name { get; }
+
+            public VictimType Type { get; }
+
+            private VictimType InitializeType()
             {
-                System.Drawing.SizeF stringSize = System.Drawing.Graphics.FromImage(tempImage).MeasureString(message, stringFont);
-                return stringSize.Width;
-            }
-        }
-                [PluginReference]
-        private Plugin ImageLibrary, Clans;
+                if (Entity is NPCMurderer)
+                    return VictimType.Zombie;
 
-        private void OnDeath(BasePlayer victim, BasePlayer initiator, HitInfo hitInfo)
-        {
-            string victimDisplayName = string.Empty;
-            string victimColorName = string.Empty;
-            string initiatorDisplayName = string.Empty;
-            string initiatorColorName = string.Empty;
+                if (Entity.name.Contains("machete.weapon"))
+                    return VictimType.Zombie;
 
-            bool needRenameVictim = false;
-            bool needRenameInitiator = false;
+                if (Entity == null)
+                    return VictimType.Invalid;
 
-            WeaponInfo weaponInfo = GetWeaponInfo(hitInfo);
 
-            float fDistance = Vector3.Distance(victim.transform.position, initiator.transform.position);
-            float sDistance = fDistance > 650 ? 650 : fDistance;
+                if (Entity is NPCPlayer)
+                    return VictimType.NPC;
 
-            weaponInfo.IsHeadShot = hitInfo.HitBone == 698017942;
+                if (Entity is BasePlayer)
+                    return VictimType.Player;
 
-            if ((initiator.IsNpc == true || initiator.userID.IsSteamId() == false) && Configuration.UseDefaultNPCName == false)
-            {
-                initiatorDisplayName = "npcplayer";
-                needRenameInitiator = true;
-            }
-            else
-            {
-                initiatorDisplayName = initiator.displayName;
-            }
+                if (Entity is BaseHelicopter)
+                    return VictimType.Helicopter;				
 
-            if ((victim.IsNpc == true || victim.userID.IsSteamId() == false) && Configuration.UseDefaultNPCName == false)
-            {
-                victimDisplayName = "npcplayer";
-                needRenameVictim = true;
-            }
-            else
-            {
-                victimDisplayName = victim.displayName;
+                if (Entity is BradleyAPC)
+                    return VictimType.BradleyAPC;
+
+                if (Entity.name.Contains("agents/"))
+                    return VictimType.Animal;
+
+                return VictimType.Invalid;
             }
 
-            foreach (var perm in Configuration.ColorsNamePlayer)
+            private string InitializeName()
             {
-                if (victim.IsNpc == false)
+                switch (Type)
                 {
-                    if (permission.UserHasPermission(victim.UserIDString, perm.Key))
-                    {
-                        victimColorName = perm.Value.ColorDeath;
-                    }
+                    case VictimType.Zombie:
+                        return "ZombieName";
+
+                    case VictimType.Player:
+                        return Entity.ToPlayer().displayName;
+
+
+                    case VictimType.NPC:
+                        return string.IsNullOrEmpty(Entity.ToPlayer()?.displayName) ? _config.NPCName : Entity.ToPlayer()?.displayName;
+
+                    case VictimType.Helicopter:
+                        return "Patrol Helicopter";						
+
+                    case VictimType.BradleyAPC:
+                        return "BradleyAPCName";   
+
+                    case VictimType.Animal:
+                        return FormatName(Entity.name);
                 }
 
-                if (initiator.IsNpc == false)
+                return string.Empty;
+            }
+        }
+
+        class DeathMessage
+        {
+            public DeathMessage(Attacker attacker, Victim victim, string weapon, string damageType, string bodyPart, double distance)
+            {
+                Attacker = attacker;
+                Victim = victim;
+                Weapon = weapon;
+                DamageType = damageType;
+                BodyPart = bodyPart;
+                Distance = distance;
+
+                Reason = InitializeReason();
+                Message = InitializeDeathMessage();
+
+                if (_config.Distance <= 0)
                 {
-                    if (permission.UserHasPermission(initiator.UserIDString, perm.Key))
-                    {
-                        initiatorColorName = perm.Value.ColorKill;
-                    }
-                }
-            }
-
-            new DeathNote(victimDisplayName, initiatorDisplayName, weaponInfo, sDistance, victimColorName, initiatorColorName, needRenameVictim, needRenameInitiator);
-        }
-
-        private WeaponInfo GetWeaponInfoFromPrefab(BaseEntity initiator)
-        {
-            WeaponInfo weaponInfo = new WeaponInfo()
-            {
-                WeaponName = string.Empty,
-                WeaponMods = new string[0],
-                IsHeadShot = false
-            };
-
-            if (initiator is AutoTurret)
-            {
-                AutoTurret autoTurret = initiator as AutoTurret;
-                Item itemWeapon = autoTurret.inventory.itemList.Where(x => x.info.category == ItemCategory.Weapon).FirstOrDefault();
-                if (itemWeapon != null)
-                {
-                    if (itemWeapon != null)
-                    {
-                        weaponInfo.WeaponName = itemWeapon.info.shortname;
-                        if (itemWeapon.contents != null)
-                        {
-                            weaponInfo.WeaponMods = itemWeapon.contents.itemList.Count > 0 ? itemWeapon.contents.itemList.Select(x => x.info.shortname).ToArray() : new string[] { };
-                        }
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(weaponInfo.WeaponName) == true)
-            {
-                if (prefabID2Item.TryGetValue(initiator.prefabID, out weaponInfo.WeaponName) == false)
-                {
-                    prefabName2Item.TryGetValue(initiator.ShortPrefabName, out weaponInfo.WeaponName);
-                }
-            }
-
-            if (string.IsNullOrEmpty(weaponInfo.WeaponName) == true)
-            {
-                weaponInfo.WeaponName = initiator.ShortPrefabName;
-            }
-
-            return weaponInfo;
-        }
-        
-                private string defaultString = string.Empty;
-
-        private object OnEntityDeath(BaseCombatEntity entity, HitInfo hitInfo)
-        {
-            if (entity is BaseAnimalNPC || entity is BaseNPC2 || entity is SimpleShark)
-            {
-                if (hitInfo == null)
-                {
-                    if (lastHitInfo.TryGetValue(entity, out hitInfo) == false)
-                    {
-                        return null;
-                    }
-                }
-
-                if (hitInfo.InitiatorPlayer != null)
-                {
-                    OnDeath(entity, hitInfo.InitiatorPlayer, hitInfo);
-                }
-            }
-            return null;
-        }
-
-        private string GetUIHeadShotString()
-        {
-            if (string.IsNullOrEmpty(defaultUIHeadShotString))
-            {
-                defaultUIHeadShotString = CreateUIHeadShotString();
-            }
-
-            return defaultUIHeadShotString;
-        }
-
-        public struct TemporaryBool
-        {
-            public bool Value;
-            public double Expire;
-        }
-        
-                public PluginConfig Configuration;
-
-        private void Init()
-        {
-            Configuration = Config.ReadObject<PluginConfig>();
-            Config.WriteObject(Configuration);
-        }
-
-        private string defaultUIContainerString = string.Empty;
-        
-                private static Timer DeathNotesTimer;
-
-        private void OnDeath(BaseEntity victim, BasePlayer initiator, HitInfo hitInfo)
-        {
-            string victimDisplayName = string.Empty;
-            string victimColorName = string.Empty;
-            string initiatorDisplayName = string.Empty;
-            string initiatorColorName = string.Empty;
-
-            bool needRenameVictim = false;
-            bool needRenameInitiator = false;
-
-            WeaponInfo weaponInfo = GetWeaponInfo(hitInfo);
-
-            float fDistance = Vector3.Distance(victim.transform.position, initiator.transform.position);
-            float sDistance = fDistance > 650 ? 650 : fDistance;
-
-            weaponInfo.IsBody = hitInfo.HitBone == 1179;
-            weaponInfo.IsHeadShot = hitInfo.HitBone == 698017942;
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-            if ((initiator.IsNpc == true || initiator.userID.IsSteamId() == false) && Configuration.UseDefaultNPCName == false)
-            {
-                initiatorDisplayName = "npcplayer";
-                needRenameInitiator = true;
-            }
-            else
-            {
-                initiatorDisplayName = initiator.displayName;
-            }
-
-            victimDisplayName = victim.ShortPrefabName;
-            needRenameVictim = true;
-
-            foreach (var perm in Configuration.ColorsNamePlayer)
-            {
-                if (initiator.IsNpc == false)
-                {
-                    if (permission.UserHasPermission(initiator.UserIDString, perm.Key))
-                    {
-                        initiatorColorName = perm.Value.ColorKill;
-                    }
-                }
-            }
-
-            new DeathNote(victimDisplayName, initiatorDisplayName, weaponInfo, sDistance, victimColorName, initiatorColorName, needRenameVictim, needRenameInitiator);
-        }
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-        private string GetReplacedString(string victimName, string initiatorName, string weaponName, string[] weaponMods, bool isHeadShot, string distance, double victimWidth, double initiatorWidth)
-        {
-            string killString = GetUIString();
-            double iconsOffset = 0.0;
-            int itemID = 0;
-            ItemDefinition item;
-
-            if (Configuration.ShowHeadShots && isHeadShot)
-            {
-                string headShotString = GetUIHeadShotString();
-                iconsOffset += 21.0;
-                headShotString = headShotString.Replace($"{{WeaponImage}}", GetImage("headshot", 16));
-                headShotString = headShotString.Replace($"{{WeaponOffsetMinX}}", $"{5 + initiatorWidth + iconsOffset}");
-                headShotString = headShotString.Replace($"{{WeaponOffsetMaxX}}", $"{5 + initiatorWidth + iconsOffset + 18}");
-                headShotString = headShotString.Substring(1, headShotString.Length - 2);
-                headShotString = "," + headShotString;
-                killString = killString.Insert(killString.Length - 1, headShotString);
-            }
-
-
-            if (Configuration.ShowWeaponMods && weaponMods.Length > 0)
-            {
-                foreach (var weaponMod in weaponMods)
-                {
-                    string weaponModString = GetUIModString();
-                    if (ItemManager.itemDictionaryByName.TryGetValue(weaponMod, out item))
-                    {
-                        itemID = item.itemid;
-                    }
-                    iconsOffset += 18.0;
-                    weaponModString = weaponModString.Replace($"1333333388", itemID == 0 ? $"{-996920608}" : itemID.ToString());
-                    weaponModString = weaponModString.Replace($"{{WeaponOffsetMinX}}", $"{5 + initiatorWidth + iconsOffset + 6}");
-                    weaponModString = weaponModString.Replace($"{{WeaponOffsetMaxX}}", $"{5 + initiatorWidth + iconsOffset + 18}");
-                    weaponModString = weaponModString.Substring(1, weaponModString.Length - 2);
-                    weaponModString = "," + weaponModString;
-                    killString = killString.Insert(killString.Length - 1, weaponModString);
-                }
-            }
-
-            if (ItemManager.itemDictionaryByName.TryGetValue(weaponName, out item))
-            {
-                itemID = item.itemid;
-            }
-            else
-            {
-                itemID = 996293980;
-            }
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-            killString = killString.Replace($"{{MainOffsetMinX}}", $"-{victimWidth + initiatorWidth + iconsOffset + 18 + 15 + 6 + 50}");
-            killString = killString.Replace($"{{InitiatorName}}", initiatorName);
-            killString = killString.Replace($"{{InitiatorOffsetMaxX}}", initiatorWidth.ToString());
-            killString = killString.Replace($"{{VictimName}}", victimName);
-            killString = killString.Replace($"{{VictimOffsetMinX}}", $"{5 + initiatorWidth + iconsOffset + 18 + 5}");
-            killString = killString.Replace($"{{VictimOffsetMaxX}}", $"{5 + initiatorWidth + iconsOffset + 18 + 5 + victimWidth}");
-            killString = killString.Replace($"{{DistanceOffsetMinX}}", $"{5 + initiatorWidth + iconsOffset + 18 + 5 + victimWidth}");
-            killString = killString.Replace($"{{DistanceOffsetMaxX}}", $"{5 + initiatorWidth + iconsOffset + 18 + 5 + victimWidth + 60}");
-            killString = killString.Replace($"{{DistanceM}}", distance + "m");
-            killString = killString.Replace($"{{DistanceMOffsetMinX}}", $"{5 + initiatorWidth + iconsOffset + 18 + 5 + victimWidth}");
-            killString = killString.Replace($"{{DistanceMOffsetMaxX}}", $"{5 + initiatorWidth + iconsOffset + 18 + 5 + victimWidth + 60}");
-            killString = killString.Replace($"1333333388", itemID == 0 ? $"{-996920608}" : itemID.ToString());
-            killString = killString.Replace($"{{WeaponOffsetMinX}}", $"{5 + initiatorWidth}");
-            killString = killString.Replace($"{{WeaponOffsetMaxX}}", $"{5 + initiatorWidth + 18}");
-
-
-            return killString;
-        }
-        private Dictionary<BaseEntity, HitInfo> lastHitInfo = new Dictionary<BaseEntity, HitInfo>();
-
-        public static string GetCleanString(string str)
-        {
-            string output = string.Empty;
-            try
-            {
-                foreach (var c in str)
-                {
-                    if (Char.IsLetterOrDigit(c) || Char.IsPunctuation(c) || Char.IsWhiteSpace(c) || Char.IsSymbol(c))
-                    {
-                        output += c;
-                    }
-                }
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-                if (string.IsNullOrEmpty(output))
-                {
-                    output = "Unknown";
-                }
-
-                if (string.IsNullOrWhiteSpace(output))
-                {
-                    output = "Unknown";
-                }
-
-                return output;
-            }
-            catch
-            {
-                return str;
-            }
-        }
-
-        private string GetUIModString()
-        {
-            if (string.IsNullOrEmpty(defaultUIModString))
-            {
-                defaultUIModString = CreateUIModString();
-            }
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-            return defaultUIModString;
-        }
-
-        protected override void LoadDefaultMessages()
-        {
-            lang.RegisterMessages(new Dictionary<string, string>
-            {
-                {"USAGE", ": Usage example: /dm <on>/<off>"},
-                {"ENABLED", ": You enable DeathMessages"},
-                {"DISABLED", ": You disable DeathMessages"}
-            }, this);
-        }
-        
-                public static StringBuilder sb = new StringBuilder();
-
-        private object OnEntityTakeDamage(BaseCombatEntity entity, HitInfo hitInfo)
-        {
-            if (entity != null && hitInfo != null)
-            {
-                if (entity is BasePlayer || entity is BaseAnimalNPC || entity is BaseNPC2 || entity is SimpleShark)
-                {
-                    lastHitInfo[entity] = hitInfo;
-                }
-            }
-
-            return null;
-        }
-        private Dictionary<uint, string> prefabID2Item = new Dictionary<uint, string>();
-        private static string HexToRustFormat(string hex)
-        {
-            Color color;
-            ColorUtility.TryParseHtmlString(hex, out color);
-            sb.Clear();
-            return sb.AppendFormat("{0:F2} {1:F2} {2:F2} {3:F2}", color.r, color.g, color.b, color.a).ToString();
-        }
-        private bool HasImage(string imageName, ulong imageId = 0) => (bool)ImageLibrary.Call("HasImage", imageName, imageId);
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-
-        private void CreateNote(string vName, string iName, float distance, string vColor, string iColor, string weaponName, string[] weaponMods, bool isHeadshot, bool needRenameVictim, bool needRenameInitiator)
-        {
-            WeaponInfo wInfo = new WeaponInfo()
-            {
-                WeaponName = weaponName,
-                WeaponMods = weaponMods,
-                IsHeadShot = isHeadshot,
-                IsBody = !isHeadshot
-            };
-
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-            new DeathNote(vName, iName, wInfo, distance, vColor, iColor, needRenameVictim, needRenameInitiator);
-        }
-
-        private string GetUIString()
-        {
-            if (string.IsNullOrEmpty(defaultString))
-            {
-                defaultString = CreateUIString();
-            }
-
-            return defaultString;
-        }
-
-        private Dictionary<ulong, TemporaryBool> uiHide = new Dictionary<ulong, TemporaryBool>();
-
-        public static DeathMessages Instance;
-        
-        
-        public struct WeaponInfo
-        {
-            public string WeaponName;
-            public string[] WeaponMods;
-            public bool IsHeadShot;
-            public bool IsBody;
-        }
-        private void OnServerSave()
-        {
-            double value = new DateTimeOffset(DateTime.Now).ToUnixTimeSeconds();
-            if (lastSave + 1800 < value)
-            {
-                lastSave = value;
-                Interface.Oxide.DataFileSystem.WriteObject("DMData", uiHide);
-            }
-        }
-
-        private string GetUIContainerString()
-        {
-            if (string.IsNullOrEmpty(defaultUIContainerString))
-            {
-                defaultUIContainerString = CreateUIContainerString();
-            }
-
-            return defaultUIContainerString;
-        }
-
-        private WeaponInfo GetWeaponInfo(HitInfo hitInfo)
-        {
-            WeaponInfo weaponInfo = new WeaponInfo()
-            {
-                WeaponName = string.Empty,
-                WeaponMods = new string[] { },
-                IsHeadShot = false
-            };
-
-            if (hitInfo.Weapon != null)
-            {
-                Item itemWeapon = hitInfo.Weapon.GetItem();
-                if (itemWeapon != null)
-                {
-                    weaponInfo.WeaponName = itemWeapon.info.shortname;
-                    if (itemWeapon.contents != null)
-                    {
-                        weaponInfo.WeaponMods = itemWeapon.contents.itemList.Count > 0 ? itemWeapon.contents.itemList.Select(x => x.info.shortname).ToArray() : new string[] { };
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(weaponInfo.WeaponName) == true && hitInfo.ProjectilePrefab != null)
-            {
-                if (hitInfo.ProjectilePrefab.sourceWeaponPrefab != null)
-                {
-                    Item itemWeapon = hitInfo.ProjectilePrefab.sourceWeaponPrefab.GetItem();
-                    if (itemWeapon != null)
-                    {
-                        weaponInfo.WeaponName = itemWeapon.info.shortname;
-                        if (itemWeapon.contents != null)
-                        {
-                            weaponInfo.WeaponMods = itemWeapon.contents.itemList.Count > 0 ? itemWeapon.contents.itemList.Select(x => x.info.shortname).ToArray() : new string[] { };
-                        }
-                    }
-                }
-            }
-
-            if (string.IsNullOrEmpty(weaponInfo.WeaponName) == true && hitInfo.WeaponPrefab != null)
-            {
-                if (prefabID2Item.TryGetValue(hitInfo.WeaponPrefab.prefabID, out weaponInfo.WeaponName) == false)
-                {
-                    prefabName2Item.TryGetValue(hitInfo.WeaponPrefab.ShortPrefabName, out weaponInfo.WeaponName);
-                }
-            }
-
-            if (string.IsNullOrEmpty(weaponInfo.WeaponName))
-            {
-                weaponInfo.WeaponName = hitInfo.damageTypes.GetMajorityDamageType().ToString();
-            }
-
-            return weaponInfo;
-        }
-
-        public class DeathNote
-        {
-            public string VictimName { get; set; }
-            public string InitiatorName { get; set; }
-
-            public WeaponInfo WeaponInfo { get; set; }
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-            public string Distance { get; set; }
-
-            public static List<string> DeathNotes = new List<string>();
-
-            public DeathNote(string victimName, string initiatorName, WeaponInfo weaponInfo, float distance, string colorVictim = "", string colorInitiator = "", bool needRenameVictim = false, bool needRenameInitiator = false)
-            {
-                this.WeaponInfo = weaponInfo;
-                this.Distance = distance.ToString("0.0");
-
-                if (needRenameVictim && Instance.Configuration.Names.TryGetValue(victimName, out victimName))
-                    this.VictimName = $"{victimName}";
-                else
-                    this.VictimName = $"<color={(string.IsNullOrEmpty(colorVictim) ? "#ffffff" : colorVictim)}>{GetCleanString(victimName)}</color>";
-
-                if (needRenameInitiator && Instance.Configuration.Names.TryGetValue(initiatorName, out initiatorName))
-                    this.InitiatorName = $"{initiatorName}";
-                else
-                    this.InitiatorName = $"<color={(string.IsNullOrEmpty(colorInitiator) ? "#ffffff" : colorInitiator)}>{GetCleanString(initiatorName)}</color>";
-
-                if (DeathNotes.Count > Instance.Configuration.MaxKillsForBar - 1)
-                    DeathNotes.Remove(DeathNotes.LastOrDefault());
-
-                if (DeathNotes.Count == 0)
-                    DeathNotes.Add(ToJson());
-                else
-                    DeathNotes.Insert(0, ToJson());
-
-                UpdateUI(true);
-                UpdateTimer();
-            }
-
-            public string ToJson()
-            {
-                return Instance.GetReplacedString
-                (
-                    VictimName,
-                    InitiatorName,
-                    WeaponInfo.WeaponName,
-                    WeaponInfo.WeaponMods,
-                    WeaponInfo.IsHeadShot,
-                    Distance,
-                    GetStringWidth(VictimName, "Roboto Condensed", 8) + 20,
-                    GetStringWidth(InitiatorName, "Roboto Condensed", 8) + 20
-                );
-            }
-        }
-        
-                [ChatCommand("dm")]
-        private void DMCmd(BasePlayer player, string cmd, string[] args)
-        {
-            if (args.Length > 0)
-            {
-                switch (args[0])
-                {
-                    case "on":
-                        {
-                            uiHide[player.userID] = new TemporaryBool()
-                            {
-                                Value = true,
-                                Expire = new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds()
-                            };
-                            SendReply(player, Configuration.ChatPrefix + lang.GetMessage("ENABLED", this, player.UserIDString));
-                            break;
-                        }
-                    case "off":
-                        {
-                            uiHide[player.userID] = new TemporaryBool()
-                            {
-                                Value = false,
-                                Expire = new DateTimeOffset(DateTime.UtcNow).ToUnixTimeSeconds()
-                            };
-                            CuiHelper.DestroyUi(player, "DeathMessages");
-                            SendReply(player, Configuration.ChatPrefix + lang.GetMessage("DISABLED", this, player.UserIDString));
-                            break;
-                        }
-                }
-                return;
-            }
-
-            SendReply(player, Configuration.ChatPrefix + lang.GetMessage("USAGE", this, player.UserIDString));
-        }
-
-        public static void UpdateTimer()
-        {
-            if (DeathNotesTimer != null)
-                DeathNotesTimer.Destroy();
-
-            DeathNotesTimer = Instance.timer.In(5f, () =>
-            {
-                if (DeathNote.DeathNotes.Count > 0)
-                {
-                    DeathNote.DeathNotes.Remove(DeathNote.DeathNotes.LastOrDefault());
-
-                    UpdateUI(false);
-                    UpdateTimer();
+                    Players = BasePlayer.activePlayerList;
                 }
                 else
                 {
-                    DeathNotesTimer.Destroy();
+                    var position = attacker?.Entity?.transform?.position;
+                    if (position == null)
+                        position = victim?.Entity?.transform?.position;
+
+                    if (position != null)
+                        Players = BasePlayer.activePlayerList.Where(x => x.Distance((UnityEngine.Vector3)position) <= _config.Distance).ToList();
+                    else
+                        Players = new List<BasePlayer>();
                 }
-            });
-        }
 
-        private bool AddImage(string url, string imageName, ulong imageId = 0, Action callback = null) => (bool)ImageLibrary.Call("AddImage", url, imageName, imageId, callback);
+                if (victim.Type == VictimType.Player && !Players.Contains(victim.Entity.ToPlayer()))
+                    Players.Add(victim.Entity.ToPlayer());
 
-        private string CreateUIString()
-        {
-            CuiElementContainer Container = new CuiElementContainer();
-            Container.Add(new CuiElement
+                if (attacker.Type == AttackerType.Player && !Players.Contains(attacker.Entity.ToPlayer()))
+                    Players.Add(attacker.Entity.ToPlayer());
+            }
+
+            public List<BasePlayer> Players { get; }
+
+            public Attacker Attacker { get; }
+
+            public Victim Victim { get; }
+
+            public string Weapon { get; }
+
+            public string BodyPart { get; }
+
+            public string DamageType { get; }
+
+            public double Distance { get; }
+
+            public DeathReason Reason { get; }
+
+            public string Message { get; }
+
+            private DeathReason InitializeReason()
             {
-                Name = $"DeathMessages.[ValueRemoved]",
-                Parent = "DeathMessages",
-                Components =
+
+                if (Attacker.Type == AttackerType.Turret)
+                    return DeathReason.Turret;
+
+                if (Attacker.Type == AttackerType.Guntrap)
+                    return DeathReason.Guntrap;
+
+                if (Attacker.Type == AttackerType.Zombie)
+                    return DeathReason.Zombie;
+
+                else if (Attacker.Type == AttackerType.Helicopter)
+                    return DeathReason.Helicopter;
+
+                else if (Attacker.Type == AttackerType.BradleyAPC)  
+                    return DeathReason.BradleyAPC;
+
+                else if (Victim.Type == VictimType.Helicopter)
+                    return DeathReason.HelicopterDeath;
+
+                else if (Victim.Type == VictimType.BradleyAPC)
+                    return DeathReason.BradleyAPCDeath;
+
+                else if (Attacker.Type == AttackerType.Structure)
+                    return DeathReason.Structure;
+
+                else if (Attacker.Type == AttackerType.Trap)
+                    return DeathReason.Trap;
+
+                else if (Attacker.Type == AttackerType.Animal)
+                    return DeathReason.Animal;
+
+                else if (Victim.Type == VictimType.Animal)
+                    return DeathReason.AnimalDeath;
+
+                else if (Weapon == "F1 Grenade" || Weapon == "Survey Charge" || Weapon == "Timed Explosive Charge" || Weapon == "Satchel Charge" || Weapon == "Beancan Grenade")
+                    return DeathReason.Explosion;
+
+
+                else if (Weapon == "Flamethrower")
+                    return DeathReason.Flamethrower;
+
+                else if (Victim.Type == VictimType.Player || Victim.Type == VictimType.NPC)
+                    return GetDeathReason(DamageType);
+
+                if (Victim.Type == VictimType.Zombie)
+                    return DeathReason.ZombieDeath;
+
+                return DeathReason.Unknown;
+
+
+            }
+
+            private DeathReason GetDeathReason(string damage)
+            {
+                var reasons = (Enum.GetValues(typeof(DeathReason)) as DeathReason[]).Where(x => x.ToString().Contains(damage));
+
+                if (reasons.Count() == 0)
+                    return DeathReason.Unknown;
+
+                return reasons.First();
+            }
+
+            private string InitializeDeathMessage()
+            {
+                string message = string.Empty;
+                string reason = string.Empty;
+
+                if (Victim.Type == VictimType.Player && Victim.Entity.ToPlayer().IsSleeping() && _config.Messages.ContainsKey(Reason + " Sleeping"))
+                    reason = Reason + " Sleeping";
+                else
+                    reason = Reason.ToString();
+
+                message = GetMessage(reason, _config.Messages);
+
+                var attackerName = Attacker.Name;
+                if (string.IsNullOrEmpty(attackerName) && Attacker.Entity == null && Weapon.Contains("Heli"))
+                    attackerName = _config.HelicopterName;				
+
+                if (string.IsNullOrEmpty(attackerName) && Attacker.Entity == null && Weapon.Contains("Bradl"))
+                    attackerName = _config.BradleyAPCName;   
+
+                switch (Attacker.Type)
                 {
-                    new CuiImageComponent
-                    {
-                        FadeIn = 1337f,
-                        Color = HexToRustFormat(Configuration.UI.BackgroundColor),
-                    },
-                    new CuiRectTransformComponent
-                    {
-                        AnchorMin = "1 1",
-                        AnchorMax = "1 1",
-                        OffsetMin = $"{{MainOffsetMinX}} {{MainOffsetMinY}}",
-                        OffsetMax = $"-6 {{MainOffsetMaxY}}",
-                    }
-                }
-            });
-            Container.Add(new CuiElement
-            {
-                Name = "DeathMessages.Initiator",
-                Parent = $"DeathMessages.[ValueRemoved]",
-                Components =
-                        {
-                            new CuiTextComponent
-                            {
-                                FadeIn = 1337f,
-                                Text = $"<color=#FFFFFF>{{InitiatorName}}</color>",
-                                Align = TextAnchor.MiddleCenter,
-                                Font = "robotocondensed-bold.ttf",
-                                FontSize = 12
-                            },
-                            new CuiRectTransformComponent
-                            {
-                                AnchorMin = $"0 0.5",
-                                AnchorMax = $"0 0.5",
-                                OffsetMin = $"5 -10",
-                                OffsetMax = $"{{InitiatorOffsetMaxX}} 10",
-                            },
-                            new CuiOutlineComponent
-                            {
-                                Color = "0 0 0 1",
-                                Distance = "-0.5 0.5"
-                            }
-                        }
-            });
-            Container.Add(new CuiElement
-            {
-                Name = "DeathMessages.Victim",
-                Parent = $"DeathMessages.[ValueRemoved]",
-                Components =
-                        {
-                            new CuiTextComponent
-                            {
-                                FadeIn = 1337f,
-                                Text = $"<color=#FFFFFF>{{VictimName}}</color>",
-                                Align = TextAnchor.MiddleCenter,
-                                Font = "robotocondensed-bold.ttf",
-                                FontSize = 12
-                            },
-                            new CuiRectTransformComponent
-                            {
-                                AnchorMin = $"0 0.5",
-                                AnchorMax = $"0 0.5",
-                                OffsetMin = $"{{VictimOffsetMinX}} -10",
-                                OffsetMax = $"{{VictimOffsetMaxX}} 10",
-                            },
-                            new CuiOutlineComponent
-                            {
-                                Color = "0 0 0 1",
-                                Distance = "-0.5 0.5"
-                            }
-                        }
-            });
-            Container.Add(new CuiElement
-            {
-                Name = $"DeathMessages.Distance",
-                Parent = $"DeathMessages.[ValueRemoved]",
-                Components =
-                            {
-                                new CuiRawImageComponent
-                                {
-                                    FadeIn = 1337f,
-                                    Color = HexToRustFormat(Configuration.UI.DistanceColor),
-                                    Material = "assets/icons/iconmaterial.mat",
-                                    Sprite = $"assets/icons/subtract.png",
-                                },
-                                new CuiRectTransformComponent
-                                {
-                                    AnchorMin = $"0 0.5",
-                                    AnchorMax = $"0 0.5",
-                                    OffsetMin = $"{{DistanceOffsetMinX}} -30",
-                                    OffsetMax = $"{{DistanceOffsetMaxX}} 30",
-                                }
-                            }
-            });
-            Container.Add(new CuiElement
-            {
-                Name = "DeathMessages.DistanceM",
-                Parent = $"DeathMessages.[ValueRemoved]",
-                Components =
-                        {
-                            new CuiTextComponent
-                            {
-                                FadeIn = 1337f,
-                                Text = $"<color=#404040>{{DistanceM}}</color>",
-                                Align = TextAnchor.MiddleCenter,
-                                Font = "robotocondensed-bold.ttf",
-                                FontSize = 12
-                            },
-                            new CuiRectTransformComponent
-                            {
-                                AnchorMin = $"0 0.5",
-                                AnchorMax = $"0 0.5",
-                                OffsetMin = $"{{DistanceMOffsetMinX}} -10",
-                                OffsetMax = $"{{DistanceMOffsetMaxX}} 10",
-                            },
-                            new CuiOutlineComponent
-                            {
-                                Color = "1 1 1 1",
-                                Distance = "-0.5 0.5"
-                            }
-                        }
-            });
-            Container.Add(new CuiElement
-            {
-                Name = $"DeathMessages.WeaponImage",
-                Parent = $"DeathMessages.[ValueRemoved]",
-                Components =
-                            {
-                                new CuiImageComponent
-                                {
-                                    FadeIn = 1337f,
-                                    ItemId = 1333333388,
-                                },
-                                new CuiRectTransformComponent
-                                {
-                                    AnchorMin = $"0 0.5",
-                                    AnchorMax = $"0 0.5",
-                                    OffsetMin = $"{{WeaponOffsetMinX}} -9",
-                                    OffsetMax = $"{{WeaponOffsetMaxX}} 9",
-                                },
-                                new CuiOutlineComponent
-                                {
-                                    Color = "0 0 0 1",
-                                    Distance = "-0.5 0.5"
-                                }
-                            }
-            });
+                    case AttackerType.ZombieDeath:
+                        attackerName = _config.ZombieName;
+                        break;
 
-            return Container.ToJson();
+                    case AttackerType.Zombie:
+                        attackerName = _config.ZombieName;
+                        break;
+
+                    case AttackerType.Helicopter:
+                        attackerName = _config.HelicopterName;
+                        break;
+
+                    case AttackerType.BradleyAPC:
+                        attackerName = _config.BradleyAPCName; 
+                        break;
+
+                    case AttackerType.NPC:
+                        attackerName = _config.NPCName;
+                        break;
+
+                    case AttackerType.Turret:
+                        attackerName = GetMessage(attackerName, _config.Turrets);
+                        break;
+                    case AttackerType.Guntrap:
+                        attackerName = GetMessage(attackerName, _config.Turrets);
+                        break;
+
+                    case AttackerType.Trap:
+                        attackerName = GetMessage(attackerName, _config.Traps);
+                        break;
+
+                    case AttackerType.Animal:
+                        attackerName = GetMessage(attackerName, _config.Animals);
+                        break;
+
+                    case AttackerType.Structure:
+                        attackerName = GetMessage(attackerName, _config.Structures);
+                        break;
+                }
+
+                var victimName = Victim.Name;
+
+                switch (Victim.Type)
+                {
+                    case VictimType.Helicopter:
+                        victimName = _config.HelicopterName;
+                        break;						
+
+                    case VictimType.BradleyAPC:
+                        victimName = _config.BradleyAPCName;  
+                        break;
+
+                    case VictimType.NPC:
+                        victimName = _config.NPCName;
+
+
+
+                        break;
+
+                    case VictimType.Zombie:
+                        victimName = _config.ZombieName;
+                        break;
+
+                    case VictimType.Animal:
+                        victimName = GetMessage(victimName, _config.Animals);
+                        break;
+                }
+
+                message = message.Replace("{attacker}", $"<color={_config.ColorAttacker}>{attackerName}</color>");
+                message = message.Replace("{victim}", $"<color={_config.ColorVictim}>{victimName}</color>");
+                message = message.Replace("{distance}", $"<color={_config.ColorDistance}>{Math.Round(Distance, 0)}</color>");
+                message = message.Replace("{weapon}", $"<color={_config.ColorWeapon}>{GetMessage(Weapon, _config.Weapons)}</color>");
+                message = message.Replace("{bodypart}", $"<color={_config.ColorBodyPart}>{GetMessage(BodyPart, _config.BodyParts)}</color>");
+
+                return message;
+            }
         }
+
+        #endregion
+
+        #region Oxide Hooks
 
         protected override void LoadDefaultConfig()
         {
-            Config.WriteObject(new PluginConfig(), true);
-        }
-        public class PluginConfig
-        {
-            [JsonProperty("Показывать смерть животных")]
-            public bool ShowAnimalsDeath = true;
-            [JsonProperty("Префикс в чате")]
-            public string ChatPrefix = "<color=#55ff8a>[DeathMessages]</color>";
-            [JsonProperty("Показывать моды оружия")]
-            public bool ShowWeaponMods = true;
-            public class ColorNickName
+            Config.Clear();
+            Config.WriteObject(new PluginConfig
             {
-                [JsonProperty("Цвет ника если игрока убили (hex)")]
-                public string ColorDeath;
-                [JsonProperty("Цвет ника если игрок убил (hex)")]
-                public string ColorKill;
-            }
-            [JsonProperty("Использовать имена НПЦ прописанные сервером и/или плагинами")]
-            public bool UseDefaultNPCName = false;
-            [JsonProperty("Время появления новой строчки в секундах")]
-            public string FadeIn = "1";
-            [JsonProperty("Настройка интерфейса")]
-            public UISettings UI = new PluginConfig.UISettings
-            {
-                BackgroundColor = "#00000080",
-                DistanceColor = "#FFFFFF00",
-                OffsetY = 0
-            };
+                Cooldown = 7,
+                FontSize = 15,
+                Distance = -1,
+                Log = true,
+                ShowDeathAnimals = true,
+                ShowDeathSleepers = true,
 
-            public class UISettings
-            {
-                [JsonProperty("Цвет задней панели убийства")]
-                public string BackgroundColor;
-                [JsonProperty("Цвет панели с дистанцией")]
-                public string DistanceColor;
-                [JsonProperty("Отступ сверху")]
-                public int OffsetY;
-            }
-            [JsonProperty("Показывать хедшоты")]
-            public bool ShowHeadShots = true;
-            [JsonProperty("Показывать смерть НПЦ")]
-            public bool ShowNPCDeath = true;
-            [JsonProperty("Названия")]
-            public Dictionary<string, string> Names = new Dictionary<string, string>()
-            {
-                ["npcplayer"] = "NPC",
-                ["guntrap.deployed"] = "Guntrap",
-                ["landmine"] = "Landmine",
-                ["beartrap"] = "Bear trap",
-                ["flameturret.deployed"] = "Flame turret",
-                ["flameturret_fireball"] = "Flame turret",
-                ["autoturret_deployed"] = "Turret",
-                ["sentry.scientist.static"] = "Turret NPC",
-                ["sentry.bandit.static"] = "Turret NPC",
-                ["spikes.floor"] = "Spikes",
-                ["spikes_static"] = "Spikes",
-                ["teslacoil.deployed"] = "Tesla",
-                ["barricade.wood"] = "Barricade",
-                ["barricade.woodwire"] = "Barricade",
-                ["barricade.metal"] = "Barricade",
-                ["bradleyapc"] = "BradleyAPC",
-                ["gates.external.high.wood"] = "Gates",
-                ["gates.external.high.stone"] = "Gates",
-                ["icewall"] = "Ice wall",
-                ["wall.external.high.ice"] = "Ice wall",
-                ["wall.external.high.stone"] = "Wall",
-                ["wall.external.high.wood"] = "Wall",
-                ["campfire"] = "Campfire",
-                ["skull_fire_pit"] = "Campfire",
-                ["lock.code"] = "Codelock",
-                ["boar"] = "Boar",
-                ["bear"] = "Bear",
-                ["polarbear"] = "Polar Bear",
-                ["wolf"] = "Wolf",
-                ["stag"] = "Stag",
-                ["chicken"] = "Chicken",
-                ["horse"] = "Horse",
-                ["minicopter.entity"] = "Minicopter",
-                ["scraptransporthelicopter"] = "Transport helicopter",
-                ["patrolhelicopter"] = "Patrol helicopter",
-                ["napalm"] = "Napalm",
-                ["fireball_small"] = "Fire",
-                ["fireball_small_shotgun"] = "Fire",
-                ["fireball_small_arrow"] = "Fire",
-                ["sam_site_turret_deployed"] = "SAM",
-                ["cactus-1"] = "Cactus",
-                ["cactus-2"] = "Cactus",
-                ["cactus-3"] = "Cactus",
-                ["cactus-4"] = "Cactus",
-                ["cactus-5"] = "Cactus",
-                ["cactus-6"] = "Cactus",
-                ["cactus-7"] = "Cactus",
-                ["hotairballoon"] = "Hot air balloon",
-                ["cave_lift_trigger"] = "Lift",
-                ["wolf2"] = "Wolf",
-                ["simpleshark"] = "Shark"
-            };
+                ColorAttacker = "#f0f223",
+                ColorVictim = "#f0f223",
+                ColorDistance = "#006ca9",
+                ColorWeapon = "#006ca9",
+                ColorBodyPart = "#006ca9",
 
-            [JsonProperty("Максимальное количество уведомлений")]
-            public int MaxKillsForBar = 3;
-            [JsonProperty("Цвет ника по привилегиям (По стандарту белый)")]
-            public Dictionary<string, ColorNickName> ColorsNamePlayer = new Dictionary<string, PluginConfig.ColorNickName>
-            {
-                { "deathmessages.premium", new PluginConfig.ColorNickName { ColorDeath = "#55ff8a", ColorKill = "#55ff8a" } },
-                { "deathmessages.vip", new PluginConfig.ColorNickName { ColorDeath = "#f9ff55", ColorKill = "#f9ff55" } },
-                { "deathmessages.deluxe", new PluginConfig.ColorNickName { ColorDeath = "#7303c0", ColorKill = "#7303c0" } },
-                { "deathmessages.godlike", new PluginConfig.ColorNickName { ColorDeath = "#ff0000", ColorKill = "#ff5782" } }
-            };
+                HelicopterName = "Вертолет",
+                BradleyAPCName = "Танк",  
+                NPCName = "НПЦ",
+                ZombieName = "Зомби",
+
+                Weapons = new Dictionary<string, string>
+                {
+                    { "Assault Rifle", "AKA-47" },
+                    { "Beancan Grenade", "Бобовая граната" },
+                    { "Nailgun", "Гвоздострел" },
+                    { "Bolt Action Rifle", "Снайперская винтовка" },
+                    { "Bone Club", "Костяная дубина" },
+                    { "Bone Knife", "Костяной нож" },
+                    { "Crossbow", "Арбалет" },
+					{ "Chainsaw", "Бензопила" },
+					{ "Compound Bow", "Блочный лук" },
+					{ "Flamethrower", "Огнемёт" },
+   					{ "Explosivesatchel", "Сумка с зарядом" },
+                    { "Custom SMG", "SMG" },
+                    { "Double Barrel Shotgun", "Двухстволка" },
+                    { "Eoka Pistol", "Самодельный пистолет" },
+                    { "F1 Grenade", "F1-граната" },
+                    { "Hunting Bow", "Охотничий лук" },
+                    { "Longsword", "Длинный меч" },
+                    { "LR-300 Assault Rifle", "LR-300" },
+                    { "M249", "Пулемёт М249" },
+                    { "M92 Pistol", "Беретта M92" },
+                    { "Mace", "Булава" },
+                    { "Machete", "Мачете" },
+                    { "MP5A4", "MP5A4" },
+					{ "Jackhammer", "Отбойник" },
+                    { "Pump Shotgun", "Помповый дробовик" },
+                    { "Python Revolver", "Питон револьвер" },
+                    { "Revolver", "Револьвер" },
+                    { "Salvaged Cleaver", "Самодельный тесак" },
+                    { "Salvaged Sword", "Самодельный меч" },
+                    { "Semi-Automatic Pistol", "Полуавтоматический пистолет" },
+                    { "Semi-Automatic Rifle", "Полуавтоматическая винтовка" },
+                    { "Stone Spear", "Каменное копьё" },
+					{ "Spas-12 Shotgun", "Дробовик Spas-12" },
+                    { "Thompson", "Томпсон" },
+                    { "Waterpipe Shotgun", "Самодельный дробовик" },
+                    { "Wooden Spear", "Деревянное копьё" },
+                    { "Hatchet", "Топор" },
+                    { "Pick Axe", "Кирка" },
+                    { "Salvaged Axe", "Самодельный топор" },
+                    { "Salvaged Hammer", "Самодельный молот" },
+                    { "Salvaged Icepick", "Самодельный ледоруб" },
+                    { "Satchel Charge", "Сумка с зарядом" },
+                    { "Stone Hatchet", "Каменный топор" },
+                    { "Stone Pick Axe", "Каменная кирка" },
+                    { "Survey Charge", "Геологический заряд" },
+                    { "Timed Explosive Charge", "С4" },
+                    { "Torch", "Факел" },
+                    { "RocketSpeed", "Скоростная ракета" },
+                    { "Incendiary Rocket", "Зажигательная ракета" },
+                    { "Rocket", "Обычная ракета" },
+                    { "RocketHeli", "Напалм вертолёта" },
+                    { "RocketBradley", "Напалм танка" }
+
+                },
+
+                Structures = new Dictionary<string, string>
+                {
+                    { "Wooden Barricade", "Деревянная баррикада" },
+                    { "Barbed Wooden Barricade", "Колючая деревянная баррикада" },
+                    { "Metal Barricade", "Металлическая баррикада" },
+                    { "High External Wooden Wall", "Высокая внешняя деревянная стена" },
+                    { "High External Stone Wall", "Высокая внешняя каменная стена" },
+                    { "High External Wooden Gate", "Высокие внешние деревянные ворота" },
+                    { "High External Stone Gate", "Высокие внешние каменные ворота" }
+                },
+
+                Traps = new Dictionary<string, string>
+                {
+                    { "Snap Trap", "Капкан" },
+                    { "Land Mine", "Мина" },
+                    { "Wooden Floor Spikes", "Деревянные колья" }
+                },
+
+                Turrets = new Dictionary<string, string>
+                {
+                    { "Flame Turret", "Огнеметная турель" },
+                    { "Auto Turret", "Автотурель" },
+                    { "Guntrap", "Автодробовик" }
+                },
+
+                Animals = new Dictionary<string, string>
+                {
+                    { "Boar", "Кабан" },
+                    { "Horse", "Лошадь" },
+                    { "Wolf", "Волк" },
+                    { "Stag", "Олень" },
+                    { "Chicken", "Курица" },
+                    { "Bear", "Медведь" }
+                },
+
+                BodyParts = new Dictionary<string, string>
+                {
+                    { "body", "Тело" },
+                    { "pelvis", "Таз" },
+                    { "hip", "Бедро" },
+                    { "left knee", "Левое колено" },
+                    { "right knee", "Правое колено" },
+                    { "left foot", "Левая стопа" },
+                    { "right foot", "Правая стопа" },
+                    { "left toe", "Левый палец" },
+                    { "right toe", "Правый палец" },
+                    { "groin", "Пах" },
+                    { "lower spine", "Нижний позвоночник" },
+                    { "stomach", "Желудок" },
+                    { "chest", "Грудь" },
+                    { "neck", "Шея" },
+                    { "left shoulder", "Левое плечо" },
+                    { "right shoulder", "Правое плечо" },
+                    { "left arm", "Левая рука" },
+                    { "right arm", "Правая рука" },
+                    { "left forearm", "Левое предплечье" },
+                    { "right forearm", "Правое предплечье" },
+                    { "left hand", "Левая ладонь" },
+                    { "right hand", "Правая ладонь" },
+                    { "left ring finger", "Левый безымянный палец" },
+                    { "right ring finger", "Правый безымянный палец" },
+                    { "left thumb", "Левый большой палец" },
+                    { "right thumb", "Правый большой палец" },
+                    { "left wrist", "Левое запястье" },
+                    { "right wrist", "Правое запястье" },
+                    { "head", "Голова" },
+                    { "jaw", "Челюсть" },
+                    { "left eye", "Левый глаз" },
+                    { "right eye", "Правый глаз" }
+                },
+
+                Messages = new Dictionary<string, string>
+                {
+                    { "Arrow", "{attacker} убил {victim} ({weapon}, {distance} м.)" },
+                    { "Blunt",  "{attacker} убил {victim} ({weapon})" },
+                    { "Bullet", "{attacker} убил {victim} ({weapon}, {distance} м.)" },
+                    { "Flamethrower", "{attacker} сжег заживо игрока {victim} ({weapon})" },
+                    { "Drowned", "{victim} утонул." },
+                    { "Explosion", "{attacker} взорвал игрока {victim} ({weapon})" },
+                    { "Fall", "{victim} разбился." },
+                    { "Generic", "Смерть забрала {victim} с собой." },
+                    { "Heat", "{victim} сгорел заживо." },
+                    { "Helicopter", "{attacker} прямым попаданием убил {victim}." },
+                    { "BradleyAPC", "{attacker} прямым попаданием убил {victim}." },
+                    { "BradleyAPCDeath", "{victim} был уничтожен игроком {attacker} ({weapon})" },
+                    { "HelicopterDeath", "{victim} был сбит игроком {attacker} ({weapon})" },
+                    { "Animal", "{attacker} добрался до {victim}" },
+                    { "ZombieDeath", "{attacker} убил {victim} ({weapon}, {distance} м.)" },
+                    { "Zombie", "{attacker} приследовал {victim}." },
+                    { "AnimalDeath", "{attacker} убил {victim} ({weapon}, {distance} м.)" },
+                    { "Hunger", "{victim} умер от голода." },
+                    { "Poison", "{victim} умер от отравления." },
+                    { "Radiation", "{victim} умер от радиационного отравления" },
+                    { "Slash", "{attacker} убил {victim} ({weapon})" },
+                    { "Stab", "{attacker} убил {victim} ({weapon})" },
+                    { "Structure", "{victim} умер от сближения с {attacker}" },
+                    { "Suicide", "{victim} совершил самоубийство." },
+                    { "Thirst", "{victim} умер от обезвоживания" },
+                    { "Trap", "{victim} попался на ловушку {attacker}" },
+                    { "Cold", "{victim} умер от холода" },
+                    { "Turret", "{victim} был убит автоматической турелью" },
+                    { "Guntrap", "{victim} был убит ловушкой-дробовиком" },
+                    { "Unknown", "У {victim} что-то пошло не так." },
+                    { "Bleeding", "{victim} умер от кровотечения" },
+
+                    //  Sleeping
+                    { "Blunt Sleeping", "{attacker} убил {victim} ({weapon})" },
+                    { "Bullet Sleeping", "{attacker} убил {victim} с ({weapon},  с {distance} метров)" },
+                    { "Flamethrower Sleeping", "{attacker} сжег игрока {victim} ({weapon})" },
+                    { "Explosion Sleeping", "{attacker} убил {victim} ({weapon})" },
+                    { "Generic Sleeping", "Смерть забрала {victim} с собой пока он спал." },
+                    { "Helicopter Sleeping", "{victim} был убит {attacker} пока он спал." },
+                    { "BradleyAPC Sleeping", "{victim} был убит {attacker} пока он спал." },
+                    { "Animal Sleeping", "{victim} убил {attacker} пока он спал." },
+                    { "Slash Sleeping", "{attacker} убил {victim} ({weapon})" },
+                    { "Stab Sleeping", "{attacker} убил {victim} ({weapon})" },
+                    { "Unknown Sleeping", "У игрока {victim} что-то пошло не так." },
+                    { "Turret Sleeping", "{attacker} был убит автоматической турелью." }
+                }
+            }, true);
+
+            //PrintWarning("Благодарим за приобритение плагина на сайте RustPlugin.ru. Если вы приобрели этот плагин на другом ресурсе знайте - это лишает вас гарантированных обновлений!");
         }
-        private string GetImage(string imageName, ulong imageId = 0, bool returnUrl = false) => (string)ImageLibrary.Call("GetImage", imageName, imageId, returnUrl);
-		   		 		  						  	   		  	   		  	 				  		 			  	 		
-        private string CreateUIContainerString()
+
+        private void OnServerInitialized()
         {
-            CuiElementContainer Container = new CuiElementContainer();
-            Container.Add(new CuiElement
+            _config = Config.ReadObject<PluginConfig>();
+        }
+
+        private Dictionary<uint, BasePlayer> LastHeli = new Dictionary<uint, BasePlayer>();
+
+        private void OnEntityTakeDamage(BaseCombatEntity entity, HitInfo info)
+        {
+            if (entity is BasePlayer)
+                _lastHits[entity.ToPlayer().userID] = info;
+            if (entity is BaseHelicopter && info.InitiatorPlayer != null)
+                LastHeli[entity.net.ID] = info.InitiatorPlayer;
+        }
+
+        private void OnEntityDeath(BaseCombatEntity victim, HitInfo info)
+        {
+            var _weapon = FirstUpper(info?.Weapon?.GetItem()?.info?.displayName?.english) ?? FormatName(info?.WeaponPrefab?.name);
+            var _damageType = FirstUpper(victim.lastDamage.ToString());
+            if (info == null)
+                if (!(victim is BasePlayer) || !victim.ToPlayer().IsWounded() || !_lastHits.TryGetValue(victim.ToPlayer().userID, out info))
+            return;
+            if (victim as BaseCorpse != null) return;
+            var _victim = new Victim(victim);
+            var _attacker = new Attacker(info.Initiator);
+            if (_victim == null)
+                return;
+            if (_attacker == null)
+                return;
+            if (_victim.Type == VictimType.Invalid)
+                return;
+            if (_attacker.Type == AttackerType.Invalid)
+                return;
+            if (_victim.Type == VictimType.Helicopter)
             {
-                Name = "DeathMessages",
-                Parent = "Hud",
-                Components =
-                    {
-                        new CuiImageComponent
-                        {
-                            Color = "0 0 0 0",
-                        },
-                        new CuiRectTransformComponent
-                        {
-                            AnchorMin = "1 1",
-                            AnchorMax = "1 1",
-                        }
-                    }
+                if (LastHeli.ContainsKey(victim.net.ID))
+                {
+                    _attacker = new Attacker(LastHeli[victim.net.ID]);
+                }
+            }
+            if ((_victim.Type == VictimType.Zombie && _attacker.Type == AttackerType.NPC))
+                return;
+            if (!_config.ShowDeathAnimals && _victim.Type == VictimType.Animal)
+            {
+                return;
+            }
+            if (!_config.ShowDeathAnimals && _attacker.Type == AttackerType.Animal)
+            {
+                return;
+            }
+            if (_victim.Type == VictimType.Player && _victim.Entity.ToPlayer().IsSleeping() && !_config.ShowDeathSleepers)
+                return;
+            var _bodyPart = victim?.skeletonProperties?.FindBone(info.HitBone)?.name?.english ?? "";
+            var _distance = info.ProjectileDistance;
+            if (_config.Log && _victim.Type == VictimType.Player && _attacker.Type == AttackerType.Player)
+            {
+
+                LogToFile("log", $"[{DateTime.Now.ToShortTimeString()}] {info.Initiator} убил {victim} ({_weapon} [{_bodyPart}] с дистанции {_distance})", this, true);
+            }
+            AddNote(new DeathMessage(_attacker, _victim, _weapon, _damageType, _bodyPart, _distance));
+        }
+
+        private void Unload()
+        {
+            foreach (var player in BasePlayer.activePlayerList)
+                DestroyUI(player);
+        }
+
+        #endregion
+
+        #region Core
+
+        private void AddNote(DeathMessage note)
+        {
+            _notes.Insert(0, note);
+            if (_notes.Count > 8)
+                _notes.RemoveRange(7, _notes.Count - 8);
+
+            RefreshUI(note);
+            timer.Once(_config.Cooldown, () =>
+            {
+                _notes.Remove(note);
+                RefreshUI(note);
             });
-
-            return Container.ToJson();
         }
 
-        private string CreateUIHeadShotString()
-        {
-            CuiElementContainer Container = new CuiElementContainer();
+        #endregion
 
-            Container.Add(new CuiElement
+        #region UI
+
+        private void RefreshUI(DeathMessage note)
+        {
+            foreach (var player in note.Players)
             {
-                Name = $"DeathMessages.WeaponHeadshot",
-                Parent = $"DeathMessages.[ValueRemoved]",
+                DestroyUI(player);
+                InitilizeUI(player);
+            }
+        }
+
+        private void DestroyUI(BasePlayer player)
+        {
+            CuiHelper.DestroyUi(player, "ui.deathmessages");
+        }
+
+        private void InitilizeUI(BasePlayer player)
+        {
+            var notes = _notes.Where(x => x.Players.Contains(player)).Take(8);
+
+            if (notes.Count() == 0)
+                return;
+
+            var container = new CuiElementContainer();
+
+            container.Add(new CuiPanel
+            {
+                Image = { Color = "0 0 0 0" },
+                RectTransform = { AnchorMin = "0.5 0.8", AnchorMax = "0.99 0.995" }
+            }, name: "ui.deathmessages");
+
+            double index = 1;
+            foreach (var note in notes)
+            {
+                InitilizeLabel(container, note.Message, $"0 {index - 0.2}", $"0.99 {index}");
+                index -= 0.14;
+            }
+
+            CuiHelper.AddUi(player, container);
+        }
+
+        private string InitilizeLabel(CuiElementContainer container, string text, string anchorMin, string anchorMax)
+        {
+            string Name = CuiHelper.GetGuid();
+            container.Add(new CuiElement
+            {
+                Name = Name,
+                Parent = "ui.deathmessages",
                 Components =
-                            {
-                                new CuiRawImageComponent
-                                {
-                                    FadeIn = 1337f,
-                                    Png = $"{{WeaponImage}}",
-                                },
-                                new CuiRectTransformComponent
-                                {
-                                    AnchorMin = $"0 0.5",
-                                    AnchorMax = $"0 0.5",
-                                    OffsetMin = $"{{WeaponOffsetMinX}} -9",
-                                    OffsetMax = $"{{WeaponOffsetMaxX}} 9",
-                                },
-                                new CuiOutlineComponent
-                                {
-                                    Color = "0 0 0 1",
-                                    Distance = "-0.5 0.5"
-                                }
-                            }
+                {
+                    new CuiTextComponent { Align = UnityEngine.TextAnchor.MiddleRight, FontSize = _config.FontSize, Text = text },
+                    new CuiRectTransformComponent { AnchorMin = anchorMin, AnchorMax = anchorMax },
+                    new CuiOutlineComponent { Color = "0 0 0 1", Distance = "1.0 -0.5" }
+                }
             });
-
-            return Container.ToJson();
+            return Name;
         }
 
-        
-                private void OnServerInitialized()
+        #endregion
+
+        #region Helpers
+
+        private static string FirstUpper(string str)
         {
-            Instance = this;
-            uiHide = Interface.Oxide.DataFileSystem.ReadObject<Dictionary<ulong, TemporaryBool>>("DMData");
+            if (string.IsNullOrEmpty(str))
+                return str;
 
-                        foreach (ItemDefinition itemDef in ItemManager.GetItemDefinitions())
+            return string.Join(" ", str.Split(' ').Select(x => x.Substring(0, 1).ToUpper() + x.Substring(1, x.Length - 1)).ToArray());
+        }
+
+        private static string FormatName(string prefab)
+        {
+            if (string.IsNullOrEmpty(prefab))
+                return string.Empty;
+
+            var formatedPrefab = FirstUpper(prefab.Split('/').Last().Replace(".prefab", "").Replace(".entity", "").Replace(".weapon", "").Replace(".deployed", "").Replace("_", "."));
+
+            switch (formatedPrefab)
             {
-                Item newItem = ItemManager.CreateByName(itemDef.shortname, 1, 0);
+                case "Autoturret.deployed": return "Auto Turret";
+                case "Flameturret": return "Flame Turret";
+                case "Guntrap.deployed": return "Guntrap";
+                case "Beartrap": return "Snap Trap";
+                case "Landmine": return "Land Mine";
+                case "Spikes.floor": return "Wooden Floor Spikes";
 
-                BaseEntity heldEntity = newItem.GetHeldEntity();
-                if (heldEntity is not null)
-                {
-                    prefabID2Item[heldEntity.prefabID] = itemDef.shortname;
-                }
+                case "Barricade.wood": return "Wooden Barricade";
+                case "Barricade.woodwire": return "Barbed Wooden Barricade";
+                case "Barricade.metal": return "Metal Barricade";
+                case "Wall.external.high.wood": return "High External Wooden Wall";
+                case "Wall.external.high.stone": return "High External Stone Wall";
+                case "Gates.external.high.stone": return "High External Wooden Gate";
+                case "Gates.external.high.wood": return "High External Stone Gate";
 
-                string deployablePrefab = itemDef.GetComponent<ItemModDeployable>()?.entityPrefab?.resourcePath;
-                if (!string.IsNullOrEmpty(deployablePrefab))
-                {
-                    string shortPrefabName = GameManager.server.FindPrefab(deployablePrefab)?.GetComponent<BaseEntity>()?.ShortPrefabName;
-                    if (!string.IsNullOrEmpty(shortPrefabName))
-                    {
-                        prefabName2Item.TryAdd(shortPrefabName, itemDef.shortname);
-                    }
-                }
+                case "Stone.hatchet": return "Stone Hatchet";
+				case "Stone.pickaxe": return "Stone Pickaxe";
+                case "Survey.charge": return "Survey Charge";
+                case "Explosive.satchel": return "Satchel Charge";
+                case "Explosive.timed": return "Timed Explosive Charge";
+                case "Grenade.beancan": return "Beancan Grenade";
+                case "Grenade.f1": return "F1 Grenade";
+                case "Hammer.salvaged": return "Salvaged Hammer";
+                case "Axe.salvaged": return "Salvaged Axe";
+                case "Icepick.salvaged": return "Salvaged Icepick";
+                case "Spear.stone": return "Stone Spear";
+                case "Spear.wooden": return "Wooden Spear";
+                case "Knife.bone": return "Bone Knife";
+                case "Rocket.basic": return "Rocket";    
+                case "Flamethrower": return "Flamethrower";
+                case "Rocket.hv": return "RocketSpeed";
+                case "Rocket.heli": return "RocketHeli";
+                case "Rocket.bradley": return "RocketBradley";
 
-                newItem.Remove();
-            }
-            
-            AddImage($"https://i.imgur.com/aK1fE31.png", "headshot", 16);
 
-            foreach (var perm in Configuration.ColorsNamePlayer)
-                permission.RegisterPermission(perm.Key, this);
-
-            if (Configuration.ShowAnimalsDeath == false)
-            {
-                Unsubscribe("OnEntityDeath");
-            }
-
-            List<ulong> hPlayersCache = new List<ulong>();
-            foreach (var hPlayer in uiHide)
-            {
-                if (hPlayer.Value.Expire + 604800 < new DateTimeOffset(DateTime.Now).ToUnixTimeMilliseconds())
-                {
-                    hPlayersCache.Add(hPlayer.Key);
-                }
-            }
-
-            foreach (var hPlayer in hPlayersCache)
-            {
-                uiHide.Remove(hPlayer);
+                default: return formatedPrefab;
             }
         }
-            }
+
+        private static string GetMessage(string name, Dictionary<string, string> source)
+        {
+            if (source.ContainsKey(name))
+                return source[name];
+
+            return name;
+        }
+
+        #endregion
+    }
 }
+                                                                                                     
