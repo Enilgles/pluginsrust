@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using Oxide.Core.Plugins;
 using UnityEngine;
 using static UnityEngine.Vector3;
 
 namespace Oxide.Plugins
 {
-    [Info("PathFinding", "Reneb / Nogrod", "1.1.3", ResourceId = 868)]
-    [Description("Path finding API, used by other plugins only")]
+    [Info("PathFinding", "Reneb / Nogrod", "1.1.1")]
     public class PathFinding : RustPlugin
     {
         private static readonly Vector3 Up = up;
@@ -335,6 +335,7 @@ namespace Oxide.Plugins
 
         private class PathFollower : MonoBehaviour
         {
+            private readonly FieldInfo viewangles = typeof (BasePlayer).GetField("viewAngles", BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.NonPublic);
             public List<Vector3> Paths = new List<Vector3>();
             public float secondsTaken;
             public float secondsToTake;
@@ -368,6 +369,7 @@ namespace Oxide.Plugins
                 nextPos = Lerp(StartPos, EndPos, waypointDone);
                 entity.transform.position = nextPos;
                 player?.ClientRPCPlayer(null, player, "ForcePositionTo", nextPos);
+                entity.TransformChanged();
             }
 
             private void FindNextWaypoint()
@@ -398,8 +400,8 @@ namespace Oxide.Plugins
 
             private void SetViewAngle(BasePlayer player, Quaternion ViewAngles)
             {
-                player.viewAngles = ViewAngles.eulerAngles;
-                player.SendNetworkUpdate();
+                viewangles.SetValue(player, ViewAngles);
+                player.SendNetworkUpdate(BasePlayer.NetworkQueue.Update);
             }
 
             private void FixedUpdate()
@@ -412,6 +414,7 @@ namespace Oxide.Plugins
         public static int groundLayer;
         public static int blockLayer;
         private static int MaxDepth = 5000;
+        private readonly FieldInfo serverinput = typeof (BasePlayer).GetField("serverInput", BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.NonPublic);
 
         protected override void LoadDefaultConfig()
         {
@@ -430,6 +433,7 @@ namespace Oxide.Plugins
             CheckCfg("Max Depth", ref MaxDepth);
             SaveConfig();
         }
+
 
         /////////////////////////////////////////////
         /// OXIDE HOOKS
@@ -542,8 +546,9 @@ namespace Oxide.Plugins
         private bool TryGetPlayerView(BasePlayer player, out Quaternion viewAngle)
         {
             viewAngle = new Quaternion(0f, 0f, 0f, 0f);
-            if (player.serverInput.current == null) return false;
-            viewAngle = Quaternion.Euler(player.serverInput.current.aimAngles);
+            var input = serverinput.GetValue(player) as InputState;
+            if (input?.current == null) return false;
+            viewAngle = Quaternion.Euler(input.current.aimAngles);
             return true;
         }
 
